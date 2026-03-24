@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+deployment/dist/
+
+# AWS CDK
+cdk.out/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Cache
+.eslintcache
+
+# Data
+data/
+
+# IDE & Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
