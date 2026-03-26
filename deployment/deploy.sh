@@ -111,8 +111,8 @@ cmd_deploy() {
       DeploymentAssetsBucketApiLambdaFunctionCodeZipPath="$lambda_key" \
       SourceAccessPointArn="$source_access_point_arn" \
       SourceFolders="$source_folders" \
-    --capability CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-    --no-cli-pager > /dev/null 2>&1 &
+    --capabilities CAPABILITY_NAMED_IAM \
+    --no-cli-pager 2>&1 | tee /tmp/cfn-deploy.log &
   local deploy_pid=$!
   local elapsed=0
   local status="STARTING"
@@ -129,11 +129,16 @@ cmd_deploy() {
   local deploy_exit=$?
   printf "\r%60s\r" ""
   if [[ $deploy_exit -ne 0 ]]; then
-    echo "✗ Stack deployment failed. Recent events:"
-    aws cloudformation describe-stack-events \
-      --stack-name CapabilityInsightsForAWS \
-      --query "StackEvents[?ResourceStatus=='CREATE_FAILED'||ResourceStatus=='UPDATE_FAILED'].[LogicalResourceId,ResourceStatusReason]" \
-      --output table
+    echo "✗ Stack deployment failed."
+    if aws cloudformation describe-stacks --stack-name CapabilityInsightsForAWS --query "Stacks[0].StackStatus" --output text 2>/dev/null; then
+      echo "Recent failed events:"
+      aws cloudformation describe-stack-events \
+        --stack-name CapabilityInsightsForAWS \
+        --query "StackEvents[?ResourceStatus=='CREATE_FAILED'||ResourceStatus=='UPDATE_FAILED'].[LogicalResourceId,ResourceStatusReason]" \
+        --output table 2>/dev/null
+    else
+      echo "Stack was deleted after rollback. Check /tmp/cfn-deploy.log for details."
+    fi
     exit 1
   fi
   echo "  ✓ Stack deployed."

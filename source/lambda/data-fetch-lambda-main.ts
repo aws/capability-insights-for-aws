@@ -76,6 +76,13 @@ export const handler = async (): Promise<{
     }
   }
 
+  // Write sync metadata
+  await dest.putObject(
+    'data/sync-metadata.json',
+    JSON.stringify({ lastSyncTime: new Date().toISOString() }),
+    ContentType[FileFormat.JSON],
+  );
+
   return { statusCode: 200, body: JSON.stringify({ message: 'ok' }) };
 };
 

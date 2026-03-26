@@ -2,6 +2,7 @@ import type { Region } from '@capability-insights/shared/types/capability/region
 import type { Product } from '@capability-insights/shared/types/capability/product';
 import type { ApiService } from '@capability-insights/shared/types/capability/api';
 import type { CfnResource } from '@capability-insights/shared/types/capability/cfn';
+import type { SyncMetadata } from '@capability-insights/shared/types/sync-metadata';
 import { s3Client } from './s3-client';
 
 export enum DataFormat {
@@ -62,6 +63,10 @@ export class CapabilityInsightsClient {
 
   async listCfnResources(): Promise<CfnResource[]> {
     return s3Client.fetchJson(this.getDataUrl(DataFile.CFN_RESOURCES, DataFormat.JSON));
+  }
+
+  async getLastSyncTime(): Promise<SyncMetadata | null> {
+    return await s3Client.fetchJson<SyncMetadata>('/data/sync-metadata.json');
   }
 }
 

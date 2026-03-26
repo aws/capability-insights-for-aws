@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ContentLayout from '@cloudscape-design/components/content-layout';
 import Header from '@cloudscape-design/components/header';
 import Container from '@cloudscape-design/components/container';
@@ -6,8 +6,10 @@ import SpaceBetween from '@cloudscape-design/components/space-between';
 import Button from '@cloudscape-design/components/button';
 import Alert from '@cloudscape-design/components/alert';
 import Box from '@cloudscape-design/components/box';
+import StatusIndicator from '@cloudscape-design/components/status-indicator';
 import { PAGE_SETTINGS } from '~/constants/app';
 import { capabilityInsightsClient } from '~/clients/capability-insights-client';
+import { formatTimestamp } from '~/utils/time-utils';
 
 import type { RouteHandle } from '~/types/route';
 
@@ -21,13 +23,20 @@ export default function Settings() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
+  useEffect(() => {
+    capabilityInsightsClient.getLastSyncTime().then(m => setLastSyncTime(m?.lastSyncTime ?? null));
+  }, []);
   const handleSync = async () => {
     setLoading(true);
     setStatus('idle');
     try {
       await capabilityInsightsClient.syncCapabilityData();
       setStatus('success');
+      setTimeout(() => {
+        capabilityInsightsClient.getLastSyncTime().then(m => setLastSyncTime(m?.lastSyncTime ?? null));
+      }, 5000);
     } catch (e) {
       setStatus('error');
       setErrorMessage(e instanceof Error ? e.message : String(e));
@@ -41,6 +50,11 @@ export default function Settings() {
       <Container header={<Header variant="h2">Data synchronization</Header>}>
         <SpaceBetween size="m">
           <Alert type="info">Data is automatically refreshed every 24 hours.</Alert>
+          {lastSyncTime ? (
+            <StatusIndicator type="success">Last synced: {formatTimestamp(lastSyncTime)}</StatusIndicator>
+          ) : (
+            <StatusIndicator type="pending">No sync has completed yet</StatusIndicator>
+          )}
           <Box variant="small" color="text-body-secondary">
             If data appears outdated, use the button below to sync manually. This runs in the background and may take a
             few minutes. Refresh the page to see the update.

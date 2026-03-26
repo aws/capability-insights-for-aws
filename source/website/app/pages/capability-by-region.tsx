@@ -6,6 +6,9 @@ import Tabs from '@cloudscape-design/components/tabs';
 import Box from '@cloudscape-design/components/box';
 import Badge from '@cloudscape-design/components/badge';
 import ColumnLayout from '@cloudscape-design/components/column-layout';
+import Link from '@cloudscape-design/components/link';
+import Popover from '@cloudscape-design/components/popover';
+import StatusIndicator from '@cloudscape-design/components/status-indicator';
 
 import { APP_NAME, PAGE_CAPABILITY_BY_REGION } from '~/constants/app';
 import type { Region } from '@capability-insights/shared/types/capability/region';
@@ -14,8 +17,8 @@ import AvailabilityTable from '~/components/availability/availability-table';
 import AvailabilityStatCard from '~/components/availability/availability-stat-card';
 import { createFilterProperties } from '~/components/availability/availability-table-properties';
 import RegionalAvailabilityTypeBadge from '~/components/availability/regional-availability-type-badge';
-import Link from '@cloudscape-design/components/link';
 import { fromApiServices, fromCfnResources, fromProducts } from '~/mappers/regional-availability.mapper';
+import { formatTimestamp } from '~/utils/time-utils';
 import type {
   ProductAvailability,
   ApiAvailability,
@@ -48,20 +51,23 @@ export default function CapabilityByRegion() {
   const [apiRows, setApiRows] = useState<RegionalAvailabilityRow<ApiAvailability>[]>([]);
   const [cfnRows, setCfnRows] = useState<RegionalAvailabilityRow<CfnAvailability>[]>([]);
   const [loading, setLoading] = useState(true);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
-      const [r, p, a, c] = await Promise.all([
+      const [r, p, a, c, syncMeta] = await Promise.all([
         capabilityInsightsClient.listRegions(),
         capabilityInsightsClient.listProducts(),
         capabilityInsightsClient.listApiOperations(),
         capabilityInsightsClient.listCfnResources(),
+        capabilityInsightsClient.getLastSyncTime(),
       ]);
       const codes = r.map(reg => reg.Region);
       setRegions(r);
       setProductRows(fromProducts(p, codes));
       setApiRows(fromApiServices(a, codes));
       setCfnRows(fromCfnResources(c, codes));
+      setLastSyncTime(syncMeta?.lastSyncTime ?? null);
       setLoading(false);
     }
     load();
@@ -72,7 +78,29 @@ export default function CapabilityByRegion() {
       header={
         <Header
           variant="h1"
-          description="Quickly compare service and feature availability across AWS regions to eliminate architecture guesswork. Identify regional capability upfront, make confident deployment decisions, and accelerate your multi-region application planning with comprehensive visibility into what's available where. Forward-looking roadmap information is provided as directional guidance to help with architecture planning activities."
+          description="Browse regional availability data for AWS services, API operations, and CloudFormation resource types."
+          actions={
+            lastSyncTime ? (
+              <Popover
+                dismissButton={false}
+                position="bottom"
+                size="small"
+                content={
+                  <SpaceBetween size="xs">
+                    <StatusIndicator type="success">{formatTimestamp(lastSyncTime)}</StatusIndicator>
+                    <Box variant="small" color="text-body-secondary">
+                      Data refreshes automatically every 24 hours.
+                    </Box>
+                    <Link href="/settings" variant="primary" fontSize="body-s">
+                      Sync manually
+                    </Link>
+                  </SpaceBetween>
+                }
+              >
+                Last sync: {formatTimestamp(lastSyncTime)}
+              </Popover>
+            ) : undefined
+          }
         >
           {PAGE_CAPABILITY_BY_REGION}
         </Header>
