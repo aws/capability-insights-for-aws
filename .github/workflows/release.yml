@@ -24,15 +24,16 @@ jobs:
       - run: npm run build
 
       - name: Package release artifacts
-        working-directory: deployment/dist
         run: |
-          zip -r ../../capability-insights-release.zip .
+          mkdir -p release-staging/build-assets/{lambda,website,template}
+          cp deployment/dist/lambda/lambdaAssets.zip release-staging/build-assets/lambda/
+          cp deployment/dist/template/capability-insights.template.json release-staging/build-assets/template/
+          cp -r deployment/dist/website/. release-staging/build-assets/website/
+          cd release-staging/build-assets && zip -r ../../build-assets.zip .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            capability-insights-release.zip
-            deployment/dist/lambda/lambdaAssets.zip
-            deployment/dist/template/capability-insights.template.json
+          make_latest: true
+          files: build-assets.zip

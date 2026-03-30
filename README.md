@@ -178,31 +178,25 @@ The deploy script prints this URL on completion.
 
 ### Manual Installation
 
-If you prefer to deploy without the script:
+If you prefer to deploy without running the deploy script, download `build-assets.zip` from the [latest release](https://github.com/aws/capability-insights-for-aws/releases/latest) and extract it. It contains:
 
-1. Install dependencies and build all assets:
+- `lambda/lambdaAssets.zip` — Lambda function code
+- `template/capability-insights.template.json` — CloudFormation template
+- `website/` — compiled website files
 
-   ```bash
-   npm install
-   npm run build
-   ```
+Then follow these steps:
 
-   This produces:
-   - `deployment/dist/template/capability-insights.template.json`
-   - `deployment/dist/lambda/lambdaAssets.zip`
-   - `deployment/dist/website/`
-
-2. Upload the Lambda code to your deployment assets bucket:
+1. Upload the Lambda code to your deployment assets bucket:
 
    ```bash
-   aws s3 cp deployment/dist/lambda/lambdaAssets.zip s3://<DEPLOYMENT_ASSETS_BUCKET>/lambdaAssets.zip
+   aws s3 cp lambda/lambdaAssets.zip s3://<DEPLOYMENT_ASSETS_BUCKET>/lambdaAssets.zip
    ```
 
-3. Deploy the CloudFormation stack:
+2. Deploy the CloudFormation stack:
 
    ```bash
    aws cloudformation deploy \
-     --template-file deployment/dist/template/capability-insights.template.json \
+     --template-file template/capability-insights.template.json \
      --stack-name CapabilityInsightsForAWS \
      --capability CAPABILITY_IAM CAPABILITY_NAMED_IAM \
      --parameter-overrides \
@@ -215,14 +209,14 @@ If you prefer to deploy without the script:
        SourceFolders=<SOURCE_FOLDERS>
    ```
 
-4. Upload the website assets:
+3. Upload the website assets:
 
    ```bash
-   aws s3 sync deployment/dist/website/ \
+   aws s3 sync website/ \
      s3://capability-insights-website-<ACCOUNT_ID>-<REGION>/
    ```
 
-5. Trigger the initial data sync:
+4. Trigger the initial data sync:
 
    ```bash
    aws lambda invoke \
