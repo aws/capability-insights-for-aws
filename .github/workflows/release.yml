@@ -2,8 +2,7 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
 
 permissions:
   contents: write
@@ -19,6 +18,10 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Get version
+        id: version
+        run: echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
       - run: npm ci
 
       - run: npm run build
@@ -31,9 +34,10 @@ jobs:
           cp -r deployment/dist/website/. release-staging/build-assets/website/
           cd release-staging/build-assets && zip -r ../../build-assets.zip .
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
           make_latest: true
           files: build-assets.zip
