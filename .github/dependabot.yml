@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: development
+    schedule:
+      interval: weekly
+    groups:
+      dev-dependencies:
+        dependency-type: development
+      aws-sdk:
+        patterns: ["@aws-sdk/*"]
+      react-router:
+        patterns: ["@react-router/*", "react-router"]
+      cloudscape:
+        patterns: ["@cloudscape-design/*"]
