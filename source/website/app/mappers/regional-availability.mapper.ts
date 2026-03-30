@@ -6,15 +6,8 @@ import type {
   ProductAvailability,
   ApiAvailability,
   CfnAvailability,
-  RegionalAvailabilityRow,
 } from '@capability-insights/shared/types/availability/regional-availability';
 import { RegionalAvailabilityType } from '@capability-insights/shared/types/availability/regional-availability';
-import {
-  fromApiOperation,
-  fromCfnResourceType,
-  fromCfnResourceConfiguration,
-  fromProductRegionalAvailability,
-} from './availability-status.mapper';
 
 /**
  * Maps raw Product data to ProductAvailability rows.
@@ -23,16 +16,12 @@ import {
  * using id/parentId references.
  *
  * @param products - Raw product data from the client
- * @param regionCodes - Regions to map availability status for
  * @returns Flat array of rows with availability status per region
  */
-export function fromProducts(
-  products: Product[],
-  regionCodes: RegionCode[],
-): RegionalAvailabilityRow<ProductAvailability>[] {
-  const rows: RegionalAvailabilityRow<ProductAvailability>[] = [];
+export function fromProducts(products: Product[]): ProductAvailability[] {
+  const rows: ProductAvailability[] = [];
 
-  const toRow = (product: Product, parentId: string | null): RegionalAvailabilityRow<ProductAvailability> => ({
+  const toRow = (product: Product, parentId: string | null): ProductAvailability => ({
     id: product.productId,
     parentId,
     name: product.productName,
@@ -40,8 +29,8 @@ export function fromProducts(
     regionalAvailabilityType:
       product.productType === ProductType.SERVICE ? RegionalAvailabilityType.SERVICE : RegionalAvailabilityType.FEATURE,
     homepageUrl: product.homepage,
-    regionDates: product.regionalAvailability.productRegionLaunchDate,
-    ...Object.fromEntries(regionCodes.map(r => [r, fromProductRegionalAvailability(r, product.regionalAvailability)])),
+    regionDates: product.launchDates,
+    regionalAvailability: product.regionalAvailability,
   });
 
   for (const p of products) {
@@ -61,14 +50,10 @@ export function fromProducts(
  * using id/parentId references.
  *
  * @param apis - Raw API service data from the client
- * @param regionCodes - Regions to map availability status for
  * @returns Flat array of rows with availability status per region
  */
-export function fromApiServices(
-  apis: ApiService[],
-  regionCodes: RegionCode[],
-): RegionalAvailabilityRow<ApiAvailability>[] {
-  const rows: RegionalAvailabilityRow<ApiAvailability>[] = [];
+export function fromApiServices(apis: ApiService[]): ApiAvailability[] {
+  const rows: ApiAvailability[] = [];
   for (const svc of apis) {
     const svcId = `svc-${svc.sdkServiceName}`;
     rows.push({
@@ -85,10 +70,8 @@ export function fromApiServices(
         parentId: svcId,
         name: op.apiAction,
         regionalAvailabilityType: RegionalAvailabilityType.OPERATION,
-        sdkServiceName: svc.sdkServiceName,
-        productName: svc.productName,
         homepageUrl: op.homepage,
-        ...Object.fromEntries(regionCodes.map(r => [r, fromApiOperation(r, op)])),
+        regionalAvailability: op.regionalAvailability,
       });
     }
   }
@@ -102,14 +85,10 @@ export function fromApiServices(
  * using id/parentId references.
  *
  * @param cfnResources - Raw CloudFormation resource data from the client
- * @param regionCodes - Regions to map availability status for
  * @returns Flat array of rows with availability status per region
  */
-export function fromCfnResources(
-  cfnResources: CfnResource[],
-  regionCodes: RegionCode[],
-): RegionalAvailabilityRow<CfnAvailability>[] {
-  const rows: RegionalAvailabilityRow<CfnAvailability>[] = [];
+export function fromCfnResources(cfnResources: CfnResource[]): CfnAvailability[] {
+  const rows: CfnAvailability[] = [];
   for (const svc of cfnResources) {
     const svcId = `cfn-${svc.serviceName}`;
     rows.push({
@@ -126,9 +105,8 @@ export function fromCfnResources(
         parentId: svcId,
         name: rt.resourceTypeName,
         regionalAvailabilityType: RegionalAvailabilityType.RESOURCE_TYPE,
-        serviceName: svc.serviceName,
         homepageUrl: rt.resourceTypeHomepage,
-        ...Object.fromEntries(regionCodes.map(r => [r, fromCfnResourceType(r, rt)])),
+        regionalAvailability: rt.regionalAvailability,
       });
       for (const prop of rt.resourceProperties ?? []) {
         const propId = `${rtId}-${prop.resourcePropertyName}`;
@@ -137,7 +115,6 @@ export function fromCfnResources(
           parentId: rtId,
           name: prop.resourcePropertyName,
           regionalAvailabilityType: RegionalAvailabilityType.PROPERTY,
-          serviceName: svc.serviceName,
         });
         for (const config of prop.resourceConfigurations) {
           rows.push({
@@ -145,8 +122,7 @@ export function fromCfnResources(
             parentId: propId,
             name: config.resourceConfigurationName,
             regionalAvailabilityType: RegionalAvailabilityType.CONFIGURATION,
-            serviceName: svc.serviceName,
-            ...Object.fromEntries(regionCodes.map(r => [r, fromCfnResourceConfiguration(r, config)])),
+            regionalAvailability: config.regionalAvailability,
           });
         }
       }

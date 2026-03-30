@@ -1,8 +1,9 @@
 import type { RegionCode } from './region';
+import type { AvailabilityStatus } from '../availability/availability-status';
 
 export interface CfnResourceConfiguration {
   resourceConfigurationName: string;
-  availableInRegions: RegionCode[];
+  regionalAvailability: Record<RegionCode, AvailabilityStatus>;
 }
 
 export interface CfnResourceProperty {
@@ -13,8 +14,7 @@ export interface CfnResourceProperty {
 export interface CfnResourceType {
   resourceTypeName: string;
   resourceTypeHomepage: string;
-  availableInRegions: RegionCode[];
-  notAvailableInRegions: RegionCode[];
+  regionalAvailability: Record<RegionCode, AvailabilityStatus>;
   resourceProperties?: CfnResourceProperty[];
 }
 

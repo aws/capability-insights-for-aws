@@ -1,4 +1,5 @@
 import type { RegionCode } from './region';
+import type { AvailabilityStatus } from '../availability/availability-status';
 
 export type ProductId = string;
 
@@ -7,19 +8,12 @@ export enum ProductType {
   FEATURE = 'FEATURE',
 }
 
-export interface ProductRegionalAvailability {
-  isAvailableIn?: RegionCode[];
-  isPlannedIn?: RegionCode[];
-  isBeingPlannedIn?: RegionCode[];
-  isNotExpandingIn?: RegionCode[];
-  productRegionLaunchDate?: Record<RegionCode, string>;
-}
-
 export interface Product {
   productId: ProductId;
   productName: string;
   productType: ProductType;
   homepage?: string;
-  regionalAvailability: ProductRegionalAvailability;
+  regionalAvailability: Record<RegionCode, AvailabilityStatus>;
+  launchDates?: Record<RegionCode, string>;
   childProducts?: Product[];
 }

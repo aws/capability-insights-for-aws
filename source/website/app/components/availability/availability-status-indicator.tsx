@@ -16,10 +16,10 @@ export default function AvailabilityStatusIndicator({ status, launchDate }: Avai
           {launchDate ?? 'Planned'}
         </StatusIndicator>
       );
-    case AvailabilityStatus.BEING_PLANNED:
+    case AvailabilityStatus.PLANNING:
       return (
         <StatusIndicator type="pending" colorOverride="yellow">
-          Being Planned
+          Planning
         </StatusIndicator>
       );
     case AvailabilityStatus.NOT_EXPANDING:

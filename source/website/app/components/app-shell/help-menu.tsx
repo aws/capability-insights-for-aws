@@ -31,7 +31,7 @@ export default function HelpMenu() {
           quarter
         </li>
         <li>
-          <AvailabilityStatusIndicator status={AvailabilityStatus.BEING_PLANNED} /> — Launch is being planned
+          <AvailabilityStatusIndicator status={AvailabilityStatus.PLANNING} /> — Launch is being planned
         </li>
         <li>
           <AvailabilityStatusIndicator status={AvailabilityStatus.NOT_EXPANDING} /> — No plans to expand to this region

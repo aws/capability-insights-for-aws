@@ -3,36 +3,14 @@ import type { PropertyFilterProps } from '@cloudscape-design/components/property
 import CollectionPreferences, {
   type CollectionPreferencesProps,
 } from '@cloudscape-design/components/collection-preferences';
-import type { Region } from '@capability-insights/shared/types/capability/region';
 import type {
-  RegionalAvailability,
-  RegionalAvailabilityRow,
-} from '@capability-insights/shared/types/availability/regional-availability';
+  PropertyFilterQuery,
+  PropertyFilterToken,
+} from '@cloudscape-design/collection-hooks';
+import type { Region } from '@capability-insights/shared/types/capability/region';
+import type { RegionalAvailability } from '@capability-insights/shared/types/availability/regional-availability';
 import type { AvailabilityStatus } from '@capability-insights/shared/types/availability/availability-status';
 import AvailabilityStatusIndicator from '~/components/availability/availability-status-indicator';
-
-export interface FilterProperty {
-  key: string;
-  label: string;
-  isEnum?: boolean;
-}
-
-/**
- * Creates type-safe filter properties for the AvailabilityTable.
- * Only allows keys that are specific to the subtype T, not base RegionalAvailability keys.
- *
- * @example
- * createFilterProperties<ProductAvailability>([
- *   { key: 'productType', label: 'Type', isEnum: true },  // Allowed
- *   { key: 'name', label: 'Name' },                       // Typescript error
- * ]);
- */
-type FilterableKeys<T extends RegionalAvailability> = Exclude<keyof T, keyof RegionalAvailability>;
-export function createFilterProperties<T extends RegionalAvailability>(
-  props: (Omit<FilterProperty, 'key'> & { key: FilterableKeys<T> })[],
-): FilterProperty[] {
-  return props.map(p => ({ ...p, key: String(p.key) }));
-}
 
 const enumOperators: PropertyFilterProps.FilteringProperty['operators'] = [
   { operator: '=', tokenType: 'enum' },
@@ -47,7 +25,7 @@ export function createColumns({
   nameColumnHeader: string;
   regions: Region[];
   nameCell?: (row: RegionalAvailability) => React.ReactNode;
-}): TableProps.ColumnDefinition<RegionalAvailabilityRow<RegionalAvailability>>[] {
+}): TableProps.ColumnDefinition<RegionalAvailability>[] {
   return [
     {
       id: 'name',
@@ -58,7 +36,7 @@ export function createColumns({
       width: 500,
     },
     ...regions.map(
-      (r): TableProps.ColumnDefinition<RegionalAvailabilityRow<RegionalAvailability>> => ({
+      (r): TableProps.ColumnDefinition<RegionalAvailability> => ({
         id: r.Region,
         header: (
           <span>
@@ -69,11 +47,10 @@ export function createColumns({
         ),
         width: 160,
         cell: row => {
-          const hasAnyRegionData = regions.some(reg => reg.Region in row);
-          if (!hasAnyRegionData) return null;
+          if (!row.regionalAvailability) return null;
           return (
             <AvailabilityStatusIndicator
-              status={(row[r.Region] as AvailabilityStatus) ?? null}
+              status={(row.regionalAvailability[r.Region] as AvailabilityStatus) ?? null}
               launchDate={row.regionDates?.[r.Region]}
             />
           );
@@ -84,27 +61,25 @@ export function createColumns({
 }
 
 export function createFilteringProperties(
-  nameColumnHeader: string,
   regions: Region[],
-  extraFilterProperties: FilterProperty[],
 ): PropertyFilterProps.FilteringProperty[] {
   return [
     {
       key: 'name',
-      propertyLabel: nameColumnHeader,
-      groupValuesLabel: `${nameColumnHeader} values`,
+      propertyLabel: 'Name',
+      groupValuesLabel: 'Name values',
       operators: ['=', '!=', ':', '!:'],
       group: 'properties',
     },
-    ...extraFilterProperties.map(fp => ({
-      key: fp.key,
-      propertyLabel: fp.label,
-      groupValuesLabel: `${fp.label} values`,
-      operators: fp.isEnum ? enumOperators : (['=', '!=', ':', '!:'] as const),
+    {
+      key: 'regionalAvailabilityType',
+      propertyLabel: 'Type',
+      groupValuesLabel: 'Type values',
+      operators: enumOperators,
       group: 'properties',
-    })),
+    },
     ...regions.map(r => ({
-      key: r.Region,
+      key: `region:${r.Region}`,
       propertyLabel: `${r.RegionLongName} (${r.Region})`,
       groupValuesLabel: `${r.RegionLongName} values`,
       operators: enumOperators,
@@ -113,12 +88,106 @@ export function createFilteringProperties(
   ];
 }
 
+/**
+ * Known property keys on RegionalAvailability that the filter can resolve
+ * directly, without needing a generic record cast.
+ */
+const KNOWN_KEYS: ReadonlySet<string> = new Set<keyof RegionalAvailability>([
+  'name',
+  'regionalAvailabilityType',
+]);
+
+/**
+ * Creates a filtering function that handles regular properties, region
+ * availability lookups (keys prefixed with "region:"), and parent-chain
+ * inheritance. When a parent matches, its children are included too.
+ */
+export function createFilteringFunction(items: RegionalAvailability[]) {
+  const byId = new Map(items.map(i => [i.id, i]));
+  const matchedIds = new Set<string>();
+
+  const resolveKnownKey = (item: RegionalAvailability, key: string): string | undefined => {
+    if (key === 'name') return item.name;
+    if (key === 'regionalAvailabilityType') return item.regionalAvailabilityType;
+    return undefined;
+  };
+
+  const resolve = (item: RegionalAvailability, key: string): string | undefined => {
+    let current: RegionalAvailability | undefined = item;
+    while (current) {
+      const value = resolveKnownKey(current, key);
+      if (value !== undefined) return value;
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+    return undefined;
+  };
+
+  const tokenMatches = (value: string | undefined, token: PropertyFilterToken): boolean => {
+    const tokenValues: string[] = Array.isArray(token.value) ? token.value : [token.value];
+    const stringValue = value ?? '';
+
+    switch (token.operator) {
+      case '=':
+        return tokenValues.includes(stringValue);
+      case '!=':
+        return !tokenValues.includes(stringValue);
+      case ':':
+        return tokenValues.some(tv => stringValue.toLowerCase().includes(tv.toLowerCase()));
+      case '!:':
+        return !tokenValues.some(tv => stringValue.toLowerCase().includes(tv.toLowerCase()));
+      default:
+        return false;
+    }
+  };
+
+  const matchesTokens = (item: RegionalAvailability, tokens: readonly PropertyFilterToken[]): boolean => {
+    for (const token of tokens) {
+      if (!token.propertyKey) continue;
+
+      const isRegion = token.propertyKey.startsWith('region:');
+      const value = isRegion
+        ? item.regionalAvailability?.[token.propertyKey.slice(7)]
+        : resolve(item, token.propertyKey);
+
+      if (!tokenMatches(value, token)) return false;
+    }
+    return true;
+  };
+
+  const hasMatchedAncestor = (item: RegionalAvailability): boolean => {
+    let current = item.parentId ? byId.get(item.parentId) : undefined;
+    while (current) {
+      if (matchedIds.has(current.id)) return true;
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+    return false;
+  };
+
+  let lastQuery: PropertyFilterQuery | null = null;
+
+  return (item: RegionalAvailability, query: PropertyFilterQuery): boolean => {
+    if (query !== lastQuery) {
+      matchedIds.clear();
+      lastQuery = query;
+    }
+
+    const tokens = query.tokenGroups ?? query.tokens;
+
+    if (matchesTokens(item, tokens as readonly PropertyFilterToken[])) {
+      matchedIds.add(item.id);
+      return true;
+    }
+
+    return hasMatchedAncestor(item);
+  };
+}
+
 export function TablePreferences({
   columns,
   preferences,
   setPreferences,
 }: {
-  columns: TableProps.ColumnDefinition<RegionalAvailabilityRow<RegionalAvailability>>[];
+  columns: TableProps.ColumnDefinition<RegionalAvailability>[];
   preferences: CollectionPreferencesProps.Preferences;
   setPreferences: (next: CollectionPreferencesProps.Preferences) => void;
 }) {

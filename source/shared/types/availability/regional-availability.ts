@@ -1,4 +1,5 @@
 import type { RegionCode } from '../capability/region';
+import type { AvailabilityStatus } from './availability-status';
 
 export enum RegionalAvailabilityType {
   SERVICE = 'Service',
@@ -17,19 +18,18 @@ export interface RegionalAvailability {
   regionalAvailabilityType: RegionalAvailabilityType;
   homepageUrl?: string;
   regionDates?: Record<RegionCode, string>;
+  regionalAvailability?: Record<RegionCode, AvailabilityStatus>;
 }
 
 export interface ApiAvailability extends RegionalAvailability {
-  sdkServiceName: string;
-  productName: string;
+  sdkServiceName?: string;
+  productName?: string;
 }
 
 export interface CfnAvailability extends RegionalAvailability {
-  serviceName: string;
+  serviceName?: string;
 }
 
 export interface ProductAvailability extends RegionalAvailability {
   productType: string;
 }
-
-export type RegionalAvailabilityRow<T extends RegionalAvailability> = T & Record<string, unknown>;

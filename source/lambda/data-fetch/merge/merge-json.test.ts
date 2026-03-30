@@ -37,13 +37,13 @@ describe('mergeJson', () => {
           productId: 'product-1',
           productName: 'Test Service',
           productType: 'SERVICE',
-          regionalAvailability: { isAvailableIn: ['us-east-1', 'us-west-2'] },
+          regionalAvailability: { 'us-east-1': 'Available', 'us-west-2': 'Available' },
           childProducts: [
             {
               productId: 'feature-1',
               productName: 'Test Feature',
               productType: 'FEATURE',
-              regionalAvailability: { isAvailableIn: ['us-east-1'] },
+              regionalAvailability: { 'us-east-1': 'Available' },
             },
           ],
         },
@@ -53,13 +53,13 @@ describe('mergeJson', () => {
           productId: 'product-1',
           productName: 'Test Service',
           productType: 'SERVICE',
-          regionalAvailability: { isAvailableIn: ['eu-west-1', 'ap-northeast-1'] },
+          regionalAvailability: { 'eu-west-1': 'Available', 'ap-northeast-1': 'Planning' },
           childProducts: [
             {
               productId: 'feature-1',
               productName: 'Test Feature',
               productType: 'FEATURE',
-              regionalAvailability: { isAvailableIn: ['eu-west-1'] },
+              regionalAvailability: { 'eu-west-1': 'Available' },
             },
           ],
         },
@@ -70,14 +70,17 @@ describe('mergeJson', () => {
       );
 
       expect(result).toHaveLength(1);
-      expect(result[0].regionalAvailability.isAvailableIn).toEqual([
-        'us-east-1',
-        'us-west-2',
-        'eu-west-1',
-        'ap-northeast-1',
-      ]);
+      expect(result[0].regionalAvailability).toEqual({
+        'us-east-1': 'Available',
+        'us-west-2': 'Available',
+        'eu-west-1': 'Available',
+        'ap-northeast-1': 'Planning',
+      });
       expect(result[0].childProducts).toHaveLength(1);
-      expect(result[0].childProducts[0].regionalAvailability.isAvailableIn).toEqual(['us-east-1', 'eu-west-1']);
+      expect(result[0].childProducts[0].regionalAvailability).toEqual({
+        'us-east-1': 'Available',
+        'eu-west-1': 'Available',
+      });
     });
   });
 
@@ -94,7 +97,7 @@ describe('mergeJson', () => {
               apiName: 'TestOperation',
               apiAction: 'TestOperation',
               homepage: 'https://example.com',
-              availableInRegions: ['us-east-1'],
+              regionalAvailability: { 'us-east-1': 'Available' },
             },
           ],
         },
@@ -110,7 +113,7 @@ describe('mergeJson', () => {
               apiName: 'TestOperation',
               apiAction: 'TestOperation',
               homepage: 'https://example.com',
-              availableInRegions: ['eu-west-1', 'ap-southeast-1'],
+              regionalAvailability: { 'eu-west-1': 'Available', 'ap-southeast-1': 'Available' },
             },
           ],
         },
@@ -122,7 +125,11 @@ describe('mergeJson', () => {
 
       expect(result).toHaveLength(1);
       expect(result[0].apis).toHaveLength(1);
-      expect(result[0].apis[0].availableInRegions).toEqual(['us-east-1', 'eu-west-1', 'ap-southeast-1']);
+      expect(result[0].apis[0].regionalAvailability).toEqual({
+        'us-east-1': 'Available',
+        'eu-west-1': 'Available',
+        'ap-southeast-1': 'Available',
+      });
     });
   });
 
@@ -135,13 +142,12 @@ describe('mergeJson', () => {
             {
               resourceTypeName: 'AWS::Test::Resource',
               resourceTypeHomepage: 'https://example.com/docs',
-              availableInRegions: ['us-east-1'],
-              notAvailableInRegions: [],
+              regionalAvailability: { 'us-east-1': 'Available' },
               resourceProperties: [
                 {
                   resourcePropertyName: 'TestProperty',
                   resourceConfigurations: [
-                    { resourceConfigurationName: 'config-v1', availableInRegions: ['us-east-1'] },
+                    { resourceConfigurationName: 'config-v1', regionalAvailability: { 'us-east-1': 'Available' } },
                   ],
                 },
               ],
@@ -156,14 +162,16 @@ describe('mergeJson', () => {
             {
               resourceTypeName: 'AWS::Test::Resource',
               resourceTypeHomepage: 'https://example.com/docs',
-              availableInRegions: ['eu-west-1', 'ap-northeast-1'],
-              notAvailableInRegions: [],
+              regionalAvailability: { 'eu-west-1': 'Available', 'ap-northeast-1': 'Unavailable' },
               resourceProperties: [
                 {
                   resourcePropertyName: 'TestProperty',
                   resourceConfigurations: [
-                    { resourceConfigurationName: 'config-v1', availableInRegions: ['eu-west-1'] },
-                    { resourceConfigurationName: 'config-v2', availableInRegions: ['eu-west-1', 'ap-northeast-1'] },
+                    { resourceConfigurationName: 'config-v1', regionalAvailability: { 'eu-west-1': 'Available' } },
+                    {
+                      resourceConfigurationName: 'config-v2',
+                      regionalAvailability: { 'eu-west-1': 'Available', 'ap-northeast-1': 'Available' },
+                    },
                   ],
                 },
               ],
@@ -185,7 +193,11 @@ describe('mergeJson', () => {
 
       // One resource type with merged regions
       const rt = result[0].resourceTypes[0];
-      expect(rt.availableInRegions).toEqual(['us-east-1', 'eu-west-1', 'ap-northeast-1']);
+      expect(rt.regionalAvailability).toEqual({
+        'us-east-1': 'Available',
+        'eu-west-1': 'Available',
+        'ap-northeast-1': 'Unavailable',
+      });
 
       // One property
       const prop = rt.resourceProperties[0];
@@ -194,14 +206,14 @@ describe('mergeJson', () => {
       // Two configurations with merged regions
       const configs = prop.resourceConfigurations;
       expect(configs).toHaveLength(2);
-      expect(configs.find(c => c.resourceConfigurationName === 'config-v1').availableInRegions).toEqual([
-        'us-east-1',
-        'eu-west-1',
-      ]);
-      expect(configs.find(c => c.resourceConfigurationName === 'config-v2').availableInRegions).toEqual([
-        'eu-west-1',
-        'ap-northeast-1',
-      ]);
+      expect(configs.find(c => c.resourceConfigurationName === 'config-v1').regionalAvailability).toEqual({
+        'us-east-1': 'Available',
+        'eu-west-1': 'Available',
+      });
+      expect(configs.find(c => c.resourceConfigurationName === 'config-v2').regionalAvailability).toEqual({
+        'eu-west-1': 'Available',
+        'ap-northeast-1': 'Available',
+      });
     });
   });
 });

@@ -9,22 +9,23 @@ import SpaceBetween from '@cloudscape-design/components/space-between';
 import Button from '@cloudscape-design/components/button';
 import ButtonDropdown from '@cloudscape-design/components/button-dropdown';
 import type { Region } from '@capability-insights/shared/types/capability/region';
-import type {
-  RegionalAvailability,
-  RegionalAvailabilityRow,
-} from '@capability-insights/shared/types/availability/regional-availability';
+import type { RegionalAvailability } from '@capability-insights/shared/types/availability/regional-availability';
+import { AvailabilityStatus } from '@capability-insights/shared/types/availability/availability-status';
 import type { ExportUrls } from '~/clients/capability-insights-client';
-import type { FilterProperty } from './availability-table-properties';
-import { createColumns, createFilteringProperties, TablePreferences } from './availability-table-properties';
+import {
+  createColumns,
+  createFilteringProperties,
+  createFilteringFunction,
+  TablePreferences,
+} from './availability-table-properties';
 
 interface AvailabilityTableProps<T extends RegionalAvailability> {
   title: string;
   nameHeader: string;
-  nameCell: (row: RegionalAvailabilityRow<T>) => React.ReactNode;
+  nameCell: (row: T) => React.ReactNode;
   regions: Region[];
-  regionalAvailability: RegionalAvailabilityRow<T>[];
+  regionalAvailability: T[];
   downloadUrls: ExportUrls;
-  customFilterProperties?: FilterProperty[];
   loading?: boolean;
 }
 
@@ -35,7 +36,6 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
   regions,
   regionalAvailability,
   downloadUrls,
-  customFilterProperties = [],
   loading = false,
 }: AvailabilityTableProps<T>) {
   const [preferences, setPreferences] = useState<CollectionPreferencesProps.Preferences>({
@@ -47,7 +47,8 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
     regions,
     nameCell: nameCell as (row: RegionalAvailability) => React.ReactNode,
   });
-  const filteringProperties = createFilteringProperties(nameHeader, regions, customFilterProperties);
+  const filteringProperties = createFilteringProperties(regions);
+  const filteringFunction = useMemo(() => createFilteringFunction(regionalAvailability), [regionalAvailability]);
 
   const hasNesting = regionalAvailability.some(i => i.parentId !== null);
   const parentItems = useMemo(
@@ -67,6 +68,7 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
     pagination: { pageSize: 20 },
     propertyFiltering: {
       filteringProperties,
+      filteringFunction,
       noMatch: ' ',
     },
     ...(hasNesting && {
@@ -78,7 +80,12 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
   });
 
   const allExpanded = hasNesting && (collectionProps.expandableRows?.expandedItems.length ?? 0) > 0;
-  const filteringOptions = propertyFilterProps.filteringOptions;
+
+  const regionOptionValues = Object.values(AvailabilityStatus);
+  const regionFilteringOptions = regions.flatMap(r =>
+    regionOptionValues.map(status => ({ propertyKey: `region:${r.Region}`, value: status })),
+  );
+  const filteringOptions = [...propertyFilterProps.filteringOptions, ...regionFilteringOptions];
 
   return (
     <Table

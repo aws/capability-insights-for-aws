@@ -3,14 +3,13 @@ import Badge from '@cloudscape-design/components/badge';
 import SpaceBetween from '@cloudscape-design/components/space-between';
 import type {
   RegionalAvailability,
-  RegionalAvailabilityRow,
 } from '@capability-insights/shared/types/availability/regional-availability';
 
 interface AvailabilityStatCardProps {
   label: string;
   loading: boolean;
   badges: [string, string];
-  rows: RegionalAvailabilityRow<RegionalAvailability>[];
+  rows: RegionalAvailability[];
 }
 
 export default function AvailabilityStatCard({ label, loading, badges, rows }: AvailabilityStatCardProps) {
