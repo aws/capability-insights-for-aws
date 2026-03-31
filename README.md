@@ -1,5 +1,9 @@
 # Capability Insights for AWS
 
+[![CI](https://github.com/aws/capability-insights-for-aws/actions/workflows/ci.yml/badge.svg?branch=development)](https://github.com/aws/capability-insights-for-aws/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/aws/capability-insights-for-aws)](https://github.com/aws/capability-insights-for-aws/releases/latest)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 Deploy a regional availability dashboard into your own AWS account, powered by data from [AWS Capabilities By Region](https://builder.aws.com/build/capabilities).
 
 ## Table of Contents
