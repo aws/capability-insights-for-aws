@@ -10,7 +10,7 @@
     "source/website"
   ],
   "scripts": {
-    "prebuild": "rm -rf deployment/dist && mkdir -p deployment/dist/{template,lambda,website}",
+    "prebuild": "rm -rf deployment/dist && mkdir -p deployment/dist/template deployment/dist/lambda deployment/dist/website",
     "build": "npm run build --workspaces",
     "postbuild": "npm run package --workspaces --if-present",
     "lint": "eslint --cache source/ && prettier --check --cache .",
