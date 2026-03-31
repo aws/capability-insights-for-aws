@@ -1,30 +1,200 @@
 # Capability Insights for AWS
 
-Capability Insights for AWS is a self-deployable solution that stands up an application in your AWS account to browse regional availability data from [AWS Capability by Region](https://builder.aws.com/build/capabilities).
+Deploy a regional availability dashboard into your own AWS account, powered by data from [AWS Capabilities By Region](https://builder.aws.com/build/capabilities).
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Installation](#installation)
+- [Accessing the Website](#accessing-the-website)
+- [Architecture](#architecture)
+- [Development](#development)
+- [License](#license)
 
 ## Overview
 
-AWS Capability by Region tracks which AWS services, features, API operations, and CloudFormation resource types are available in each AWS region. It offers a [public website](https://builder.aws.com/build/capabilities) for commercial regions, and also provides data through S3 buckets for both public and non-public partitions. Enterprise customers in non-commercial partitions can onboard to receive additional data. This solution pulls from those S3 sources, merges the data, and presents it through a searchable dashboard deployed into your VPC.
+[AWS Capabilities By Region](https://builder.aws.com/build/capabilities) helps you discover and compare AWS services, features, APIs, and CloudFormation resources across regions. With detailed availability data and forward-looking roadmap information, you can make informed decisions about global deployments and avoid project delays. You can explore this data on our [public website](https://builder.aws.com/build/capabilities), which covers over 35 regions across the commercial, AWS GovCloud (US), and European Sovereign Cloud partitions.
 
-The dashboard covers three categories of Capability:
+This open-source solution builds on top of AWS Capabilities By Region by deploying a searchable dashboard into your own AWS account. Data is pulled directly into your AWS account, accessible inside your own VPC, and refreshes automatically every 24 hours. If your organization has been granted access to additional data sources beyond what's publicly available, this solution can incorporate those as well, giving you a unified view across all [partitions](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html) you have access to. To learn more about accessing additional data, work with your AWS representative.
 
-- **Services and features**: which AWS services and features are available, planned, or not expanding per region, with expected launch dates
-- **API operations**: individual API action availability per region for each AWS service SDK
-- **CloudFormation resource types**: which resource types are supported in each region
+The dashboard covers:
 
-Data refreshes automatically every 24 hours and can also be triggered on demand.
+- **Services and features** — availability status, expected launch dates, and expansion plans per region
+- **API operations** — individual API action availability per region for each AWS service
+- **CloudFormation resource types** — which resource types are supported in each region
+
+The solution deploys entirely within your VPC so that all data remains within your network. You provide your own VPC, subnets, and S3 bucket so the solution integrates with your existing infrastructure and security controls.
 
 ### Solution Architecture
 
 ![High-level architecture](docs/images/high-level-architecture.png)
 
-The solution assumes you have an existing VPC with two subnets (one with an internet gateway, one without), plus an S3 bucket to hold deployment assets.
+The solution deploys a static website, REST API, and Lambda functions into your VPC. For a detailed breakdown of all resources, see [Architecture](#architecture).
+
+## Installation
+
+Capability Insights for AWS consists of a CloudFormation stack, Lambda function code, and a static website. You can deploy these using our automated script, which builds and deploys everything in one step. If your organization requires deploying with native AWS tooling only, you can download pre-built artifacts from our [GitHub Releases](https://github.com/aws/capability-insights-for-aws/releases/latest) and deploy them directly with the AWS CLI.
+
+### Prerequisites
+
+**On your machine:**
+
+- [AWS CLI](https://aws.amazon.com/cli/) configured with credentials for the target AWS account
+
+**In your AWS account:**
+
+Capability Insights for AWS deploys into your existing network infrastructure. You will need the following in the AWS account and region where you want the dashboard accessible:
+
+| Resource | Description |
+| -------- | ----------- |
+| VPC | The VPC where you want the dashboard deployed. Must have DNS resolution enabled. |
+| └ Subnet (with internet gateway) | Users access the dashboard from this subnet. |
+| └ Subnet (without internet gateway) | Lambda functions run here securely with no direct internet access. |
+| S3 access point ARN | How the solution reads capability data from the source. Provided during onboarding. |
+
+If you don't have an existing VPC and subnets to deploy into, we provide a [Sample Environment Stack](#sample-environment-stack-optional) that creates these resources for you.
+
+The solution deploys to whichever region is configured in your AWS CLI profile. To check your current region, run `aws configure get region`. To change it, run `aws configure set region <REGION>`.
+
+### Automated Installation
+
+In addition to the prerequisites above, you will need [Node.js](https://nodejs.org/) (includes `npm` and `npx`).
+
+1. Clone this repository:
+
+   ```bash
+   git clone https://github.com/aws/capability-insights-for-aws.git
+   cd capability-insights-for-aws
+   ```
+
+2. Create an S3 bucket for deployment assets with public access blocked. This bucket is used exclusively to store the Lambda code package during deployment. We recommend naming it `capability-insights-assets-<ACCOUNT_ID>-<REGION>`.
+
+3. Install dependencies:
+
+   ```bash
+   npm install
+   ```
+
+4. Run the deploy script:
+
+   ```bash
+   npm run deploy
+   ```
+
+   The script builds all assets, prompts for parameters, deploys the CloudFormation stack, uploads the website, and triggers an initial data sync.
+
+   You will be prompted for `SourceFolders`, a comma-separated list of data sources to pull from. The default is `public`. If your organization has been granted access to additional [partitions](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html), include them as well (e.g., `aws-cn,public`).
+
+Once complete, see [Accessing the Website](#accessing-the-website).
+
+#### Deploy Flags
+
+All parameters can be passed as flags to skip the interactive prompts:
+
+```bash
+npm run deploy -- \
+  --private-vpc-id vpc-0abc123 \
+  --backend-subnet-id subnet-0abc123 \
+  --api-access-subnet-id subnet-0def456 \
+  --deployment-assets-bucket-name my-deploy-bucket \
+  --source-access-point-arn arn:aws:s3:us-east-1:123456789012:accesspoint/my-access-point \
+  --source-folders aws-cn,public
+```
+
+| Flag                              | Description                                                                                      |
+| --------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `--private-vpc-id`                | VPC ID. Must have DNS resolution and DNS hostnames enabled.                                      |
+| `--backend-subnet-id`             | Subnet without an internet gateway, used for Lambda compute.                                     |
+| `--api-access-subnet-id`          | Subnet with an internet gateway, used for user access and the API Gateway VPC Endpoint.          |
+| `--deployment-assets-bucket-name` | S3 bucket where deployment assets (Lambda code zip) are stored.                                  |
+| `--source-access-point-arn`       | S3 access point ARN for the capability data source (provided during onboarding).                 |
+| `--source-folders`                | Comma-separated list of data sources to pull from (default: `public`). Include additional partitions if granted access. |
+
+#### Teardown
+
+> **Warning**: This will empty the website bucket (static assets and capability data) and delete the CloudFormation stack.
+
+```bash
+npm run teardown
+```
+
+### Manual Installation
+
+For organizations that require deploying with native AWS tooling only, pre-built deployment artifacts are published with each [release](https://github.com/aws/capability-insights-for-aws/releases/latest). This path uses only the AWS CLI and standard CloudFormation. No Node.js, CDK, or build tools needed.
+
+Download `build-assets.zip` from the [latest release](https://github.com/aws/capability-insights-for-aws/releases/latest) and extract it. It contains:
+
+- `lambda/lambdaAssets.zip` : Lambda function code
+- `template/capability-insights.template.json` : CloudFormation template
+- `website/` : compiled website files ready to upload to S3
+
+Then follow these steps:
+
+1. Create an S3 bucket for deployment assets with public access blocked. This bucket is used exclusively to store the Lambda code package during deployment. We recommend naming it `capability-insights-assets-<ACCOUNT_ID>-<REGION>`.
+
+2. Upload the Lambda code to your deployment assets bucket:
+
+   ```bash
+   aws s3 cp lambda/lambdaAssets.zip s3://<DEPLOYMENT_ASSETS_BUCKET>/lambdaAssets.zip
+   ```
+
+3. Deploy the CloudFormation stack:
+
+   ```bash
+   aws cloudformation deploy \
+     --template-file template/capability-insights.template.json \
+     --stack-name CapabilityInsightsForAWS \
+     --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+     --parameter-overrides \
+       PrivateVpcId=<VPC_ID> \
+       BackendSubnetId=<BACKEND_SUBNET_ID> \
+       ApiAccessSubnetId=<API_ACCESS_SUBNET_ID> \
+       DeploymentAssetsBucketName=<DEPLOYMENT_ASSETS_BUCKET> \
+       DeploymentAssetsBucketApiLambdaFunctionCodeZipPath=lambdaAssets.zip \
+       SourceAccessPointArn=<SOURCE_ACCESS_POINT_ARN> \
+       SourceFolders=<SOURCE_FOLDERS>
+   ```
+
+4. Upload the website assets:
+
+   ```bash
+   aws s3 sync website/ \
+     s3://capability-insights-website-<ACCOUNT_ID>-<REGION>/
+   ```
+
+5. Trigger the initial data sync:
+
+   ```bash
+   aws lambda invoke \
+     --function-name CapabilityInsightsDataFetchLambda \
+     --invocation-type Event /dev/null
+   ```
+
+Once complete, see [Accessing the Website](#accessing-the-website).
+
+## Accessing the Website
+
+The website is hosted on S3 and accessible only from within your VPC. After deployment, navigate to:
+
+```
+http://capability-insights-website-<ACCOUNT_ID>-<REGION>.s3-website-<REGION>.amazonaws.com
+```
+
+The automated deploy script prints this URL on completion.
+
+Since the website is not publicly accessible, you need a way to reach it from within the VPC. Common options include:
+
+- **Existing VPN or Direct Connect** — if your organization already has connectivity to the VPC, use it directly
+- **AWS Client VPN** — set up a [Client VPN endpoint](https://docs.aws.amazon.com/vpn/latest/clientvpn-admin/what-is.html) in the VPC
+- **EC2 instance with SOCKS proxy** — SSH into an instance in the VPC and proxy browser traffic through it (see [Accessing the Website from Your Machine](#accessing-the-website-from-your-machine) in the Development section for a step-by-step guide)
+
+## Architecture
 
 This repository provides two CloudFormation stacks:
 
-#### 1. Capability Insights Stack
+### Capability Insights Stack
 
-The core solution. It deploys a website and API into your VPC, along with a Lambda function that periodically pulls capability data from the AWS Capability by Region S3 bucket and makes it available through the website. Data refreshes every 24 hours and can also be triggered on demand.
+The core solution. It deploys a website and API into your VPC, along with a Lambda function that periodically pulls capability data from the AWS Capabilities By Region S3 bucket and makes it available through the website.
 
 | Resource                   | Description                                                                         |
 | -------------------------- | ----------------------------------------------------------------------------------- |
@@ -37,9 +207,9 @@ The core solution. It deploys a website and API into your VPC, along with a Lamb
 | EventBridge Rule           | Triggers the DataFetch Lambda every 24 hours                                        |
 | S3 Gateway Endpoint        | Allows the website bucket to be accessed from within the VPC                        |
 
-#### 2. CapabilityInsightsSampleEnvironment Stack (optional)
+### Sample Environment Stack (optional)
 
-A development scaffold for testing when you don't have an existing environment to deploy into.
+A development stack that mimics a customer environment for testing. Customers deploying the solution use their own existing VPC and subnets. This stack creates those resources so contributors can develop and test without one.
 
 | Resource                  | Description                                       |
 | ------------------------- | ------------------------------------------------- |
@@ -51,11 +221,9 @@ A development scaffold for testing when you don't have an existing environment t
 | EC2 Instance (Linux)      | Amazon Linux 2023 instance for testing            |
 | IAM Role                  | Instance role with SSM and S3 access              |
 
-Users access the website from within the VPC, for example through an EC2 instance or AWS Client VPN.
-
 ### Package Structure
 
-This project uses [npm workspaces](https://docs.npmjs.com/cli/using-npm/workspaces) to manage four packages under `source/`. Running `npm run build` from the root builds all packages in the correct order, and shared dependencies are hoisted to the root `node_modules/`.
+This project uses [npm workspaces](https://docs.npmjs.com/cli/using-npm/workspaces) to manage four packages under `source/`.
 
 ```
 ├── deployment/              # Deployment and dev scripts
@@ -66,169 +234,31 @@ This project uses [npm workspaces](https://docs.npmjs.com/cli/using-npm/workspac
 ├── source/
 │   ├── shared/              # Shared TypeScript types
 │   ├── lambda/              # Lambda function code
-│   ├── constructs/          # CDK infrastructure
+│   ├── constructs/          # CDK infrastructure (synthesizes to CloudFormation)
 │   └── website/             # React frontend
 └── package.json             # Root workspace configuration
 ```
 
 #### `source/constructs`
 
-CDK application that defines the two CloudFormation stacks.
-
-Many enterprise customers do not use CDK, so we use CDK as a development tool to produce a standard CloudFormation template that can be deployed in any environment. On build, it synthesizes the Capability Insights stack, strips CDK metadata, and writes the clean template to `deployment/dist/template/`. The CapabilityInsightsSampleEnvironment stack is used directly via `cdk deploy` during development.
+CDK application that defines the two CloudFormation stacks. We use CDK as a development tool to produce a standard CloudFormation template that can be deployed with the AWS CLI in any environment. No CDK installation required for deployment. On build, it synthesizes the Capability Insights stack and writes the template to `deployment/dist/template/`.
 
 #### `source/lambda`
 
-Contains relevant backend lambda code:
-
 - **API Lambda** (`api-lambda-main.ts`): Backs the API Gateway and routes requests from the website.
 - **DataFetch Lambda** (`data-fetch-lambda-main.ts`): Reads capability data from the source S3 access point, merges data across multiple source folders, and writes the results to the website bucket in both JSON and CSV formats.
-
-API endpoints:
-
-| Method | Endpoint              | Body | Description                                                         |
-| ------ | --------------------- | ---- | ------------------------------------------------------------------- |
-| POST   | `/syncCapabilityData` | None | Triggers an asynchronous data fetch from the source S3 access point |
 
 #### `source/website`
 
 A React dashboard built with [Cloudscape Design System](https://cloudscape.design/) to visualize the capability data.
 
-## Installation
-
-### Prerequisites
-
-**Your computer:**
-
-- [Node.js](https://nodejs.org/) (includes `npm` and `npx`)
-- [AWS CLI](https://aws.amazon.com/cli/) configured with valid credentials
-
-**Your AWS account:**
-
-- A VPC with DNS resolution and DNS hostnames enabled
-- Two subnets in that VPC: one with an internet gateway (for user access and the API Gateway VPC Endpoint), one without (for Lambda compute)
-- An S3 access point ARN for the capability data source (provided during onboarding)
-
-### Deploy
-
-> **Region**: The solution deploys to whichever AWS region is configured in your CLI profile. To check your current region, run:
->
-> ```bash
-> aws configure get region
-> ```
->
-> To deploy to a different region, either set it in your profile (`aws configure set region <REGION>`) or export the `AWS_DEFAULT_REGION` environment variable before running the deploy script.
-
-1. Create an S3 bucket for deployment assets with public access blocked. We recommend naming it `capability-insights-assets-<ACCOUNT_ID>-<REGION>`.
-
-2. Install dependencies:
-
-   ```bash
-   npm install
-   ```
-
-3. Run the deploy script:
-
-   ```bash
-   npm run deploy
-   ```
-
-   The script builds all assets, prompts for parameters, deploys the CloudFormation stack, uploads the website, and triggers an initial data sync. You will be prompted for a `SourceAccessPointArn` — this is the S3 access point ARN for the capability data source bucket, provided to you during onboarding. You will also be prompted for `SourceFolders` — a comma-separated list of folder names in the access point to fetch data from (defaults to `public`).
-
-### Deploy Flags
-
-All parameters can be passed as flags to skip the interactive prompts:
-
-```bash
-npm run deploy -- \
-  --private-vpc-id vpc-0abc123 \
-  --backend-subnet-id subnet-0abc123 \
-  --api-access-subnet-id subnet-0def456 \
-  --deployment-assets-bucket-name my-deploy-bucket \
-  --source-access-point-arn arn:aws:s3:us-east-1:123456789012:accesspoint/my-access-point \
-  --source-folders public
-```
-
-| Flag                              | Description                                                                                      |
-| --------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `--private-vpc-id`                | VPC ID. Must have DNS resolution and DNS hostnames enabled.                                      |
-| `--backend-subnet-id`             | Subnet without an internet gateway, where the Lambda functions run.                              |
-| `--api-access-subnet-id`          | Subnet where users access the website from. The API Gateway VPC Endpoint is created here.        |
-| `--deployment-assets-bucket-name` | S3 bucket for deployment assets (Lambda code zip).                                               |
-| `--source-access-point-arn`       | S3 access point ARN for the capability data source (provided during onboarding).                 |
-| `--source-folders`                | Comma-separated list of folder names in the access point to fetch data from (default: `public`). |
-
-### Teardown
-
-```bash
-npm run teardown
-```
-
-This deletes the CloudFormation stack and empties the website S3 bucket.
-
-### Accessing the Website
-
-The website is accessible from within your VPC. Connect through a client in the VPC (e.g. an EC2 instance, AWS Client VPN) and navigate to:
-
-```
-http://capability-insights-website-<ACCOUNT_ID>-<REGION>.s3-website-<REGION>.amazonaws.com
-```
-
-The deploy script prints this URL on completion.
-
-### Manual Installation
-
-If you prefer to deploy without running the deploy script, download `build-assets.zip` from the [latest release](https://github.com/aws/capability-insights-for-aws/releases/latest) and extract it. It contains:
-
-- `lambda/lambdaAssets.zip` — Lambda function code
-- `template/capability-insights.template.json` — CloudFormation template
-- `website/` — compiled website files
-
-Then follow these steps:
-
-1. Upload the Lambda code to your deployment assets bucket:
-
-   ```bash
-   aws s3 cp lambda/lambdaAssets.zip s3://<DEPLOYMENT_ASSETS_BUCKET>/lambdaAssets.zip
-   ```
-
-2. Deploy the CloudFormation stack:
-
-   ```bash
-   aws cloudformation deploy \
-     --template-file template/capability-insights.template.json \
-     --stack-name CapabilityInsightsForAWS \
-     --capability CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-     --parameter-overrides \
-       PrivateVpcId=<VPC_ID> \
-       BackendSubnetId=<BACKEND_SUBNET_ID> \
-       ApiAccessSubnetId=<API_ACCESS_SUBNET_ID> \
-       DeploymentAssetsBucketName=<DEPLOYMENT_ASSETS_BUCKET> \
-       DeploymentAssetsBucketApiLambdaFunctionCodeZipPath=lambdaAssets.zip \
-       SourceAccessPointArn=<SOURCE_ACCESS_POINT_ARN> \
-       SourceFolders=<SOURCE_FOLDERS>
-   ```
-
-3. Upload the website assets:
-
-   ```bash
-   aws s3 sync website/ \
-     s3://capability-insights-website-<ACCOUNT_ID>-<REGION>/
-   ```
-
-4. Trigger the initial data sync:
-
-   ```bash
-   aws lambda invoke \
-     --function-name CapabilityInsightsDataFetchLambda \
-     --invocation-type Event /dev/null
-   ```
-
 ## Development
 
-The CapabilityInsightsSampleEnvironment stack provisions a VPC, subnets, an EC2 instance, and a deployment assets bucket for testing.
+This repository contains two CloudFormation stacks. The Capability Insights stack is what users deploy into their existing infrastructure. The Sample Environment stack creates a VPC, subnets, EC2 instance, and deployment bucket that mimic a customer environment. Use it for local development and testing when you don't have an existing environment to deploy into.
 
-To access the EC2 instance via SSH, first generate a key pair and import the public key into EC2:
+Since the dashboard is only accessible from within the VPC, the sample stack includes an EC2 instance that you can SSH into and use as a proxy to reach the dashboard from your machine. See [Accessing the Website from Your Machine](#accessing-the-website-from-your-machine) for a step-by-step guide.
+
+To get started, generate an SSH key pair and import it into EC2:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/ci-key
@@ -293,7 +323,7 @@ Launch Chrome using that proxy:
   --user-data-dir="%TEMP%\chrome-proxy"
 ```
 
-Finally, navigate to the website URL printed by the deploy script:
+Finally, navigate to the website URL:
 
 ```
 http://capability-insights-website-<ACCOUNT_ID>-<REGION>.s3-website-<REGION>.amazonaws.com
