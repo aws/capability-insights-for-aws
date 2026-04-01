@@ -36,11 +36,13 @@ export const handler = async (): Promise<{
 
   // Validate each folder by checking for a v1 manifest
   const validFolders: string[] = [];
+  const errors: string[] = [];
   for (const folder of folders) {
     try {
       await source.getObject(`${folder}/v1/manifest.json`);
       validFolders.push(`${folder}/`);
     } catch (e) {
+      errors.push(`No manifest found for folder: ${folder}`);
       logger.info('No manifest found, skipping folder', {
         folder,
         error: String(e),
@@ -58,6 +60,7 @@ export const handler = async (): Promise<{
           const raw = await source.getObject(`${folder}v1/${format}/${name}.${format}`);
           chunks.push(raw);
         } catch (e) {
+          errors.push(`Failed to fetch ${format}/${name} from ${folder}: ${String(e)}`);
           logger.error('Failed to fetch file', {
             folder,
             format,
@@ -76,12 +79,11 @@ export const handler = async (): Promise<{
     }
   }
 
-  // Write sync metadata
-  await dest.putObject(
-    'data/sync-metadata.json',
-    JSON.stringify({ lastSyncTime: new Date().toISOString() }),
-    ContentType[FileFormat.JSON],
-  );
+  // Write sync metadata — only set lastSyncTime on full success
+  const metadata: import('@capability-insights/shared/types/sync-metadata').SyncMetadata =
+    errors.length > 0 ? { errors } : { lastSyncTime: new Date().toISOString() };
+
+  await dest.putObject('data/sync-metadata.json', JSON.stringify(metadata), ContentType[FileFormat.JSON]);
 
   return { statusCode: 200, body: JSON.stringify({ message: 'ok' }) };
 };

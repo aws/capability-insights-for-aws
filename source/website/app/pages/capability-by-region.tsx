@@ -13,6 +13,7 @@ import StatusIndicator from '@cloudscape-design/components/status-indicator';
 import { APP_NAME, PAGE_CAPABILITY_BY_REGION } from '~/constants/app';
 import type { Region } from '@capability-insights/shared/types/capability/region';
 import { capabilityInsightsClient, DataFile } from '~/clients/capability-insights-client';
+import type { SyncMetadata } from '@capability-insights/shared/types/sync-metadata';
 import AvailabilityTable from '~/components/availability/availability-table';
 import AvailabilityStatCard from '~/components/availability/availability-stat-card';
 import RegionalAvailabilityTypeBadge from '~/components/availability/regional-availability-type-badge';
@@ -38,11 +39,11 @@ export default function CapabilityByRegion() {
   const [apiRows, setApiRows] = useState<ApiAvailability[]>([]);
   const [cfnRows, setCfnRows] = useState<CfnAvailability[]>([]);
   const [loading, setLoading] = useState(true);
-  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [syncMetadata, setSyncMetadata] = useState<SyncMetadata | null>(null);
 
   useEffect(() => {
     async function load() {
-      const [r, p, a, c, syncMeta] = await Promise.all([
+      const [r, p, a, c, syncMetadataResult] = await Promise.all([
         capabilityInsightsClient.listRegions(),
         capabilityInsightsClient.listProducts(),
         capabilityInsightsClient.listApiOperations(),
@@ -53,7 +54,7 @@ export default function CapabilityByRegion() {
       setProductRows(fromProducts(p));
       setApiRows(fromApiServices(a));
       setCfnRows(fromCfnResources(c));
-      setLastSyncTime(syncMeta?.lastSyncTime ?? null);
+      setSyncMetadata(syncMetadataResult);
       setLoading(false);
     }
     load();
@@ -66,14 +67,36 @@ export default function CapabilityByRegion() {
           variant="h1"
           description="Browse regional availability data for AWS services, API operations, and CloudFormation resource types."
           actions={
-            lastSyncTime ? (
+            syncMetadata?.errors?.length ? (
+              <Popover
+                dismissButton={false}
+                position="bottom"
+                size="large"
+                content={
+                  <SpaceBetween size="xs">
+                    {syncMetadata.errors.map((err, i) => (
+                      <StatusIndicator key={i} type="error">
+                        {err}
+                      </StatusIndicator>
+                    ))}
+                    <Link href="/settings" variant="primary" fontSize="body-s">
+                      Go to settings
+                    </Link>
+                  </SpaceBetween>
+                }
+              >
+                <StatusIndicator type="error">
+                  Sync completed with {syncMetadata.errors.length} error(s)
+                </StatusIndicator>
+              </Popover>
+            ) : syncMetadata?.lastSyncTime ? (
               <Popover
                 dismissButton={false}
                 position="bottom"
                 size="small"
                 content={
                   <SpaceBetween size="xs">
-                    <StatusIndicator type="success">{formatTimestamp(lastSyncTime)}</StatusIndicator>
+                    <StatusIndicator type="success">{formatTimestamp(syncMetadata.lastSyncTime)}</StatusIndicator>
                     <Box variant="small" color="text-body-secondary">
                       Data refreshes automatically every 24 hours.
                     </Box>
@@ -83,7 +106,7 @@ export default function CapabilityByRegion() {
                   </SpaceBetween>
                 }
               >
-                Last sync: {formatTimestamp(lastSyncTime)}
+                Last sync: {formatTimestamp(syncMetadata.lastSyncTime)}
               </Popover>
             ) : undefined
           }

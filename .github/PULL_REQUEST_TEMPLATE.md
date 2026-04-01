@@ -38,3 +38,7 @@ Bump the `version` in `package.json` when you want to cut a new release:
 - **Patch** (1.0.0 → 1.0.1): Bug fixes, dependency updates, docs changes
 - **Minor** (1.0.0 → 1.1.0): New features, non-breaking changes
 - **Major** (1.0.0 → 2.0.0): Breaking changes (e.g., new required CloudFormation parameters)
+
+### Licensing
+
+By submitting this pull request, I confirm that my contribution is made under the terms of the Apache 2.0 license.

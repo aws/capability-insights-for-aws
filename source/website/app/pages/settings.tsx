@@ -7,9 +7,11 @@ import Button from '@cloudscape-design/components/button';
 import Alert from '@cloudscape-design/components/alert';
 import Box from '@cloudscape-design/components/box';
 import StatusIndicator from '@cloudscape-design/components/status-indicator';
+import Popover from '@cloudscape-design/components/popover';
 import { PAGE_SETTINGS } from '~/constants/app';
 import { capabilityInsightsClient } from '~/clients/capability-insights-client';
 import { formatTimestamp } from '~/utils/time-utils';
+import type { SyncMetadata } from '@capability-insights/shared/types/sync-metadata';
 
 import type { RouteHandle } from '~/types/route';
 
@@ -23,20 +25,18 @@ export default function Settings() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
-  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [syncMetadata, setSyncMetadata] = useState<SyncMetadata | null>(null);
 
   useEffect(() => {
-    capabilityInsightsClient.getLastSyncTime().then(m => setLastSyncTime(m?.lastSyncTime ?? null));
+    capabilityInsightsClient.getLastSyncTime().then(setSyncMetadata);
   }, []);
+
   const handleSync = async () => {
     setLoading(true);
     setStatus('idle');
     try {
       await capabilityInsightsClient.syncCapabilityData();
       setStatus('success');
-      setTimeout(() => {
-        capabilityInsightsClient.getLastSyncTime().then(m => setLastSyncTime(m?.lastSyncTime ?? null));
-      }, 5000);
     } catch (e) {
       setStatus('error');
       setErrorMessage(e instanceof Error ? e.message : String(e));
@@ -50,8 +50,25 @@ export default function Settings() {
       <Container header={<Header variant="h2">Data synchronization</Header>}>
         <SpaceBetween size="m">
           <Alert type="info">Data is automatically refreshed every 24 hours.</Alert>
-          {lastSyncTime ? (
-            <StatusIndicator type="success">Last synced: {formatTimestamp(lastSyncTime)}</StatusIndicator>
+          {syncMetadata?.errors?.length ? (
+            <Popover
+              dismissButton={false}
+              position="bottom"
+              size="large"
+              content={
+                <SpaceBetween size="xs">
+                  {syncMetadata.errors.map((err, i) => (
+                    <StatusIndicator key={i} type="error">
+                      {err}
+                    </StatusIndicator>
+                  ))}
+                </SpaceBetween>
+              }
+            >
+              <StatusIndicator type="error">Sync completed with {syncMetadata.errors.length} error(s)</StatusIndicator>
+            </Popover>
+          ) : syncMetadata?.lastSyncTime ? (
+            <StatusIndicator type="success">Last synced: {formatTimestamp(syncMetadata.lastSyncTime)}</StatusIndicator>
           ) : (
             <StatusIndicator type="pending">No sync has completed yet</StatusIndicator>
           )}
