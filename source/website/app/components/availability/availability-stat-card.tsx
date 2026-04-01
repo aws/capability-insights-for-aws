@@ -1,9 +1,7 @@
 import Box from '@cloudscape-design/components/box';
 import Badge from '@cloudscape-design/components/badge';
 import SpaceBetween from '@cloudscape-design/components/space-between';
-import type {
-  RegionalAvailability,
-} from '@capability-insights/shared/types/availability/regional-availability';
+import type { RegionalAvailability } from '@capability-insights/shared/types/availability/regional-availability';
 
 interface AvailabilityStatCardProps {
   label: string;

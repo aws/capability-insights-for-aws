@@ -3,10 +3,7 @@ import type { PropertyFilterProps } from '@cloudscape-design/components/property
 import CollectionPreferences, {
   type CollectionPreferencesProps,
 } from '@cloudscape-design/components/collection-preferences';
-import type {
-  PropertyFilterQuery,
-  PropertyFilterToken,
-} from '@cloudscape-design/collection-hooks';
+import type { PropertyFilterQuery, PropertyFilterToken } from '@cloudscape-design/collection-hooks';
 import type { Region } from '@capability-insights/shared/types/capability/region';
 import type { RegionalAvailability } from '@capability-insights/shared/types/availability/regional-availability';
 import type { AvailabilityStatus } from '@capability-insights/shared/types/availability/availability-status';
@@ -60,9 +57,7 @@ export function createColumns({
   ];
 }
 
-export function createFilteringProperties(
-  regions: Region[],
-): PropertyFilterProps.FilteringProperty[] {
+export function createFilteringProperties(regions: Region[]): PropertyFilterProps.FilteringProperty[] {
   return [
     {
       key: 'name',
@@ -87,15 +82,6 @@ export function createFilteringProperties(
     })),
   ];
 }
-
-/**
- * Known property keys on RegionalAvailability that the filter can resolve
- * directly, without needing a generic record cast.
- */
-const KNOWN_KEYS: ReadonlySet<string> = new Set<keyof RegionalAvailability>([
-  'name',
-  'regionalAvailabilityType',
-]);
 
 /**
  * Creates a filtering function that handles regular properties, region

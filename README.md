@@ -49,12 +49,12 @@ Capability Insights for AWS consists of a CloudFormation stack, Lambda function 
 
 Capability Insights for AWS deploys into your existing network infrastructure. You will need the following in the AWS account and region where you want the dashboard accessible:
 
-| Resource | Description |
-| -------- | ----------- |
-| VPC | The VPC where you want the dashboard deployed. Must have DNS resolution enabled. |
-| └ Subnet (with internet gateway) | Users access the dashboard from this subnet. |
-| └ Subnet (without internet gateway) | Lambda functions run here securely with no direct internet access. |
-| S3 access point ARN | How the solution reads capability data from the source. Provided during onboarding. |
+| Resource                            | Description                                                                         |
+| ----------------------------------- | ----------------------------------------------------------------------------------- |
+| VPC                                 | The VPC where you want the dashboard deployed. Must have DNS resolution enabled.    |
+| └ Subnet (with internet gateway)    | Users access the dashboard from this subnet.                                        |
+| └ Subnet (without internet gateway) | Lambda functions run here securely with no direct internet access.                  |
+| S3 access point ARN                 | How the solution reads capability data from the source. Provided during onboarding. |
 
 If you don't have an existing VPC and subnets to deploy into, we provide a [Sample Environment Stack](#sample-environment-stack-optional) that creates these resources for you.
 
@@ -105,13 +105,13 @@ npm run deploy -- \
   --source-folders aws-cn,public
 ```
 
-| Flag                              | Description                                                                                      |
-| --------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `--private-vpc-id`                | VPC ID. Must have DNS resolution and DNS hostnames enabled.                                      |
-| `--backend-subnet-id`             | Subnet without an internet gateway, used for Lambda compute.                                     |
-| `--api-access-subnet-id`          | Subnet with an internet gateway, used for user access and the API Gateway VPC Endpoint.          |
-| `--deployment-assets-bucket-name` | S3 bucket where deployment assets (Lambda code zip) are stored.                                  |
-| `--source-access-point-arn`       | S3 access point ARN for the capability data source (provided during onboarding).                 |
+| Flag                              | Description                                                                                                             |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `--private-vpc-id`                | VPC ID. Must have DNS resolution and DNS hostnames enabled.                                                             |
+| `--backend-subnet-id`             | Subnet without an internet gateway, used for Lambda compute.                                                            |
+| `--api-access-subnet-id`          | Subnet with an internet gateway, used for user access and the API Gateway VPC Endpoint.                                 |
+| `--deployment-assets-bucket-name` | S3 bucket where deployment assets (Lambda code zip) are stored.                                                         |
+| `--source-access-point-arn`       | S3 access point ARN for the capability data source (provided during onboarding).                                        |
 | `--source-folders`                | Comma-separated list of data sources to pull from (default: `public`). Include additional partitions if granted access. |
 
 #### Teardown
