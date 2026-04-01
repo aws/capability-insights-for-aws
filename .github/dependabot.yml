@@ -9,8 +9,8 @@ updates:
       dev-dependencies:
         dependency-type: development
       aws-sdk:
-        patterns: ["@aws-sdk/*"]
+        patterns: ['@aws-sdk/*']
       react-router:
-        patterns: ["@react-router/*", "react-router"]
+        patterns: ['@react-router/*', 'react-router']
       cloudscape:
-        patterns: ["@cloudscape-design/*"]
+        patterns: ['@cloudscape-design/*']

@@ -1,7 +1,6 @@
 import { ProductType, type Product } from '@capability-insights/shared/types/capability/product';
 import type { ApiService } from '@capability-insights/shared/types/capability/api';
 import type { CfnResource } from '@capability-insights/shared/types/capability/cfn';
-import type { RegionCode } from '@capability-insights/shared/types/capability/region';
 import type {
   ProductAvailability,
   ApiAvailability,
