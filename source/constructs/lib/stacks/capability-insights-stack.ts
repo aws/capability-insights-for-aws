@@ -93,7 +93,7 @@ export class CapabilityInsightsStack extends cdk.Stack {
             Sid: 'AllowVPCEndpointAccess',
             Effect: 'Allow',
             Principal: '*',
-            Action: 's3:*',
+            Action: 's3:GetObject',
             Resource: [
               cdk.Fn.getAtt(websiteBucket.logicalId, 'Arn').toString(),
               cdk.Fn.sub('${BucketArn}/*', {

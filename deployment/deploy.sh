@@ -51,7 +51,7 @@ prompt_if_empty() {
   local current="${!varname}"
   if [[ -z "$current" ]]; then
     read -p "$prompt: " current
-    eval "$varname=\"$current\""
+    printf -v "$varname" '%s' "$current"
   fi
 }
 
