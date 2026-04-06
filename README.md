@@ -11,6 +11,7 @@ Deploy a regional availability dashboard into your own AWS account, powered by d
 - [Overview](#overview)
 - [Installation](#installation)
 - [Accessing the Website](#accessing-the-website)
+- [User Guide](#user-guide)
 - [Architecture](#architecture)
 - [Development](#development)
 - [License](#license)
@@ -26,6 +27,8 @@ The dashboard covers:
 - **Services and features** — availability status, expected launch dates, and expansion plans per region
 - **API operations** — individual API action availability per region for each AWS service
 - **CloudFormation resource types** — which resource types are supported in each region
+
+![Dashboard overview](docs/images/dashboard-overview.png)
 
 The solution deploys entirely within your VPC so that all data remains within your network. You provide your own VPC, subnets, and S3 bucket so the solution integrates with your existing infrastructure and security controls.
 
@@ -191,6 +194,42 @@ Since the website is not publicly accessible, you need a way to reach it from wi
 - **Existing VPN or Direct Connect** — if your organization already has connectivity to the VPC, use it directly
 - **AWS Client VPN** — set up a [Client VPN endpoint](https://docs.aws.amazon.com/vpn/latest/clientvpn-admin/what-is.html) in the VPC
 - **EC2 instance with SOCKS proxy** — SSH into an instance in the VPC and proxy browser traffic through it (see [Accessing the Website from Your Machine](#accessing-the-website-from-your-machine) in the Development section for a step-by-step guide)
+
+## User Guide
+
+Once deployed, the dashboard provides a searchable view of AWS service, API, and CloudFormation resource availability across regions. This section walks through the main features.
+
+### Browsing Services and Features
+
+The main page shows all AWS services and features with their availability status across regions. Use the search bar to filter by name, and paginate or sort the columns as needed.
+
+![Services and features](docs/images/user-guide-services-and-features.png)
+
+### Expanding Service Details
+
+Click the arrow next to any service to expand it and see individual feature availability. Each feature shows its status per region, so you can quickly identify gaps.
+
+![Expanded services](docs/images/user-guide-expanded-services.png)
+
+### Understanding Status Values
+
+Click the info icon in the top-right corner to open the help panel. It explains each status value — Available, Planning, Not Expanding — and what date indicators like "2026 Q3" mean.
+
+![Help panel](docs/images/user-guide-help-panel.png)
+
+### Exporting Data
+
+Click the Export button to download the current view as JSON or CSV. This is useful for sharing data with your team or feeding it into other tools.
+
+![Export options](docs/images/user-guide-export.png)
+
+### Navigation and Settings
+
+Open the side navigation to switch between the Capability by Region dashboard and Settings. The Settings page shows the last sync time and lets you trigger a manual data refresh.
+
+![Navigation](docs/images/user-guide-navigation.png)
+
+![Settings](docs/images/user-guide-settings.png)
 
 ## Architecture
 
