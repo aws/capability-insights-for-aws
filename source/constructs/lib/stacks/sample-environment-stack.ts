@@ -92,8 +92,10 @@ export class CapabilityInsightsSampleEnvironmentStack extends cdk.Stack {
           {
             Effect: 'Allow',
             Principal: '*',
-            Action: 's3:*',
-            Resource: '*',
+            Action: 's3:GetObject',
+            Resource: cdk.Fn.sub(
+              'arn:${AWS::Partition}:s3:::capability-insights-website-${AWS::AccountId}-${AWS::Region}/*',
+            ),
           },
         ],
       },
@@ -120,11 +122,7 @@ export class CapabilityInsightsSampleEnvironmentStack extends cdk.Stack {
           },
         ],
       },
-      managedPolicyArns: [
-        // Let instances access S3
-        cdk.Fn.sub('arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'),
-        cdk.Fn.sub('arn:${AWS::Partition}:iam::aws:policy/AmazonS3FullAccess'),
-      ],
+      managedPolicyArns: [cdk.Fn.sub('arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore')],
     });
 
     // Create Linux instance
@@ -185,26 +183,11 @@ export class CapabilityInsightsSampleEnvironmentStack extends cdk.Stack {
         ignorePublicAcls: true,
         restrictPublicBuckets: true,
       },
-    });
-    new s3.CfnBucketPolicy(this, `${deploymentAssetsBucketResourceName}-Policy`, {
-      bucket: this.deploymentAssetsBucket.ref,
-      policyDocument: {
-        Statement: [
+      bucketEncryption: {
+        serverSideEncryptionConfiguration: [
           {
-            Sid: 'AllowVPCEndpointAccess',
-            Effect: 'Allow',
-            Principal: '*',
-            Action: 's3:*',
-            Resource: [
-              cdk.Fn.getAtt(this.deploymentAssetsBucket.logicalId, 'Arn').toString(),
-              cdk.Fn.sub('${BucketArn}/*', {
-                BucketArn: cdk.Fn.getAtt(this.deploymentAssetsBucket.logicalId, 'Arn').toString(),
-              }),
-            ],
-            Condition: {
-              StringEquals: {
-                'aws:SourceVpc': this.vpc.attrVpcId,
-              },
+            serverSideEncryptionByDefault: {
+              sseAlgorithm: 'AES256',
             },
           },
         ],

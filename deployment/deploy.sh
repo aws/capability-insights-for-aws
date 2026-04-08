@@ -20,6 +20,7 @@ Deploy options (pass as flags or omit to be prompted):
   --deployment-assets-bucket-name <name> S3 bucket for deployment assets
   --source-access-point-arn <arn>        S3 access point ARN for capability data source
   --source-folders <folders>             Comma-separated list of source folders (default: public)
+  -y, --yes                              Skip confirmation prompts
 
 Examples:
   # Provide all parameters inline
@@ -56,7 +57,7 @@ prompt_if_empty() {
 }
 
 cmd_deploy() {
-  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders=""
+  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders="" auto_approve=""
 
   while [[ $# -gt 0 ]]; do
     case $1 in
@@ -66,6 +67,7 @@ cmd_deploy() {
       --deployment-assets-bucket-name)   deployment_assets_bucket_name="$2"; shift 2 ;;
       --source-access-point-arn)         source_access_point_arn="$2"; shift 2 ;;
       --source-folders)                  source_folders="$2"; shift 2 ;;
+      -y|--yes)                          auto_approve="true"; shift ;;
       *) echo "Unknown option: $1"; usage ;;
     esac
   done
@@ -92,8 +94,10 @@ cmd_deploy() {
 
   echo ""
   echo "Deploying to account $AWS_ACCOUNT in $AWS_REGION"
-  read -p "Continue? (y/N): " confirm
-  [[ "$confirm" =~ ^[Yy]$ ]] || exit 0
+  if [[ "$auto_approve" != "true" ]]; then
+    read -p "Continue? (y/N): " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || exit 0
+  fi
 
   echo "── Uploading Lambda zip ──"
   local lambda_key="lambdaAssets-$(date +%s).zip"
@@ -164,9 +168,11 @@ cmd_teardown() {
   get_account_and_region
   local website_bucket="capability-insights-website-${ACCOUNT_ID}-${REGION}"
 
-  echo "This will delete the CapabilityInsightsForAWS stack and empty the website bucket."
-  read -p "Continue? (y/N): " confirm
-  [[ "$confirm" =~ ^[Yy]$ ]] || exit 0
+  if [[ "$AUTO_APPROVE" != "true" ]]; then
+    echo "This will delete the CapabilityInsightsForAWS stack and empty the website bucket."
+    read -p "Continue? (y/N): " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || exit 0
+  fi
 
   echo "── Emptying website bucket ──"
   aws s3 rm "s3://$website_bucket" --recursive || true
@@ -193,6 +199,11 @@ cmd_teardown() {
 
 COMMAND="${1:-}"
 shift || true
+
+AUTO_APPROVE=""
+for arg in "$@"; do
+  [[ "$arg" == "-y" || "$arg" == "--yes" ]] && AUTO_APPROVE="true"
+done
 
 case "$COMMAND" in
   deploy)   cmd_deploy "$@" ;;

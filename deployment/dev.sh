@@ -22,6 +22,9 @@ Deploy options:
   --source-access-point-arn <arn>  S3 access point ARN for capability data source
   --source-folders <folders>       Comma-separated list of source folders (default: public)
 
+Global options:
+  -y, --yes                        Skip confirmation prompts
+
 EOF
   exit 1
 }
@@ -62,6 +65,7 @@ cmd_deploy() {
     case $1 in
       --source-access-point-arn) source_access_point_arn="$2"; shift 2 ;;
       --source-folders) source_folders="$2"; shift 2 ;;
+      -y|--yes) shift ;;
       *) echo "Unknown option: $1"; usage ;;
     esac
   done
@@ -96,13 +100,14 @@ cmd_deploy() {
     --backend-subnet-id "$backend_subnet_id" \
     --api-access-subnet-id "$api_access_subnet_id" \
     --deployment-assets-bucket-name "$deployment_assets_bucket_name" \
-    "${access_point_args[@]}"
+    "${access_point_args[@]}" \
+    ${AUTO_APPROVE:+--yes}
 }
 
 cmd_teardown() {
   echo "── Dev Teardown ──"
 
-  "$SCRIPT_DIR/deploy.sh" teardown
+  "$SCRIPT_DIR/deploy.sh" teardown ${AUTO_APPROVE:+--yes}
 
   echo "── Emptying assets bucket ──"
   local account_id=$(aws sts get-caller-identity --query Account --output text)
@@ -120,6 +125,11 @@ cmd_teardown() {
 
 COMMAND="${1:-}"
 shift || true
+
+AUTO_APPROVE=""
+for arg in "$@"; do
+  [[ "$arg" == "-y" || "$arg" == "--yes" ]] && AUTO_APPROVE="true"
+done
 
 case "$COMMAND" in
   setup)    cmd_setup "$@" ;;
