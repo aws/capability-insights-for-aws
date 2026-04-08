@@ -222,13 +222,6 @@ export class CapabilityInsightsStack extends cdk.Stack {
               },
               {
                 Effect: 'Allow',
-                Action: ['kms:Decrypt'],
-                Resource: cdk.Fn.sub('arn:${AWS::Partition}:kms:*:${SourceAccount}:key/*', {
-                  SourceAccount: cdk.Fn.select(4, cdk.Fn.split(':', sourceAccessPointArnParameter.valueAsString)),
-                }),
-              },
-              {
-                Effect: 'Allow',
                 Action: ['s3:PutObject'],
                 Resource: cdk.Fn.sub('${BucketArn}/data/*', {
                   BucketArn: cdk.Fn.getAtt(websiteBucket.logicalId, 'Arn').toString(),
