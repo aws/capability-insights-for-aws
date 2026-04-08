@@ -84,6 +84,15 @@ export class CapabilityInsightsStack extends cdk.Stack {
         indexDocument: 'index.html',
         errorDocument: 'index.html',
       },
+      bucketEncryption: {
+        serverSideEncryptionConfiguration: [
+          {
+            serverSideEncryptionByDefault: {
+              sseAlgorithm: 'AES256',
+            },
+          },
+        ],
+      },
     });
     new s3.CfnBucketPolicy(this, `${websiteBucketResourceName}-Policy`, {
       bucket: websiteBucket.ref,
@@ -308,7 +317,10 @@ export class CapabilityInsightsStack extends cdk.Stack {
               {
                 Effect: 'Allow',
                 Action: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
-                Resource: cdk.Fn.sub('arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'),
+                Resource: cdk.Fn.sub(
+                  'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${FunctionName}:*',
+                  { FunctionName: apiLambdaName },
+                ),
               },
             ],
           },
