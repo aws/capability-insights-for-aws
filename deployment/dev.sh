@@ -46,14 +46,14 @@ cmd_setup() {
   echo "── Deploying CapabilityInsightsSampleEnvironment ──"
   cd "$ROOT_DIR/source/constructs"
 
-  local context_args=""
+  local context_args=()
   if [[ -n "$key_pair" ]]; then
-    context_args="-c ec2KeyPair=$key_pair"
+    context_args=(-c "ec2KeyPair=$key_pair")
   fi
 
   npx cdk bootstrap
   npx cdk --app "node dist/bin/dev" deploy "$STACK_NAME" \
-    $context_args --require-approval never
+    "${context_args[@]}" --require-approval never
 
   echo ""
   echo "✓ CapabilityInsightsSampleEnvironment deployed"
@@ -71,10 +71,11 @@ cmd_deploy() {
   done
 
   echo "── Reading CapabilityInsightsSampleEnvironment outputs ──"
-  local private_vpc_id=$(get_stack_output "PrivateVpcId")
-  local backend_subnet_id=$(get_stack_output "BackendSubnetId")
-  local api_access_subnet_id=$(get_stack_output "ApiAccessSubnetId")
-  local deployment_assets_bucket_name=$(get_stack_output "DeploymentAssetsBucketName")
+  local private_vpc_id backend_subnet_id api_access_subnet_id deployment_assets_bucket_name
+  private_vpc_id=$(get_stack_output "PrivateVpcId")
+  backend_subnet_id=$(get_stack_output "BackendSubnetId")
+  api_access_subnet_id=$(get_stack_output "ApiAccessSubnetId")
+  deployment_assets_bucket_name=$(get_stack_output "DeploymentAssetsBucketName")
 
   if [[ -z "$private_vpc_id" || -z "$backend_subnet_id" || -z "$api_access_subnet_id" || -z "$deployment_assets_bucket_name" ]]; then
     echo "Error: Could not read CapabilityInsightsSampleEnvironment outputs. Run '$0 setup' first."
@@ -101,18 +102,19 @@ cmd_deploy() {
     --api-access-subnet-id "$api_access_subnet_id" \
     --deployment-assets-bucket-name "$deployment_assets_bucket_name" \
     "${access_point_args[@]}" \
-    ${AUTO_APPROVE:+--yes}
+    "${AUTO_APPROVE:+--yes}"
 }
 
 cmd_teardown() {
   echo "── Dev Teardown ──"
 
-  "$SCRIPT_DIR/deploy.sh" teardown ${AUTO_APPROVE:+--yes}
+  "$SCRIPT_DIR/deploy.sh" teardown "${AUTO_APPROVE:+--yes}"
 
   echo "── Emptying assets bucket ──"
-  local account_id=$(aws sts get-caller-identity --query Account --output text)
-  local region=$(aws configure get region || echo "us-east-1")
-  local assets_bucket="capability-insights-assets-${account_id}-${region}"
+  local account_id region assets_bucket
+  account_id=$(aws sts get-caller-identity --query Account --output text)
+  region=$(aws configure get region || echo "us-east-1")
+  assets_bucket="capability-insights-assets-${account_id}-${region}"
   aws s3 rm "s3://$assets_bucket" --recursive || true
 
   echo "── Destroying CapabilityInsightsSampleEnvironment ──"

@@ -2,7 +2,6 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$SCRIPT_DIR/.."
 source "$SCRIPT_DIR/check-deps.sh"
 
 usage() {
@@ -51,7 +50,7 @@ prompt_if_empty() {
   local prompt=$2
   local current="${!varname}"
   if [[ -z "$current" ]]; then
-    read -p "$prompt: " current
+    read -rp "$prompt: " current
     printf -v "$varname" '%s' "$current"
   fi
 }
@@ -86,7 +85,7 @@ cmd_deploy() {
   fi
   while [[ ! "$source_folders" =~ ^[a-zA-Z0-9_-]+(,[a-zA-Z0-9_-]+)*$ ]]; do
     echo "Invalid format. Must be a comma-separated list of folder names (letters, numbers, hyphens, underscores)."
-    read -p "SourceFolders (comma-separated, default: public): " source_folders
+    read -rp "SourceFolders (comma-separated, default: public): " source_folders
     if [[ -z "$source_folders" ]]; then
       source_folders="public"
     fi
@@ -95,12 +94,13 @@ cmd_deploy() {
   echo ""
   echo "Deploying to account $AWS_ACCOUNT in $AWS_REGION"
   if [[ "$auto_approve" != "true" ]]; then
-    read -p "Continue? (y/N): " confirm
+    read -rp "Continue? (y/N): " confirm
     [[ "$confirm" =~ ^[Yy]$ ]] || exit 0
   fi
 
   echo "── Uploading Lambda zip ──"
-  local lambda_key="lambdaAssets-$(date +%s).zip"
+  local lambda_key
+  lambda_key="lambdaAssets-$(date +%s).zip"
   aws s3 cp "$SCRIPT_DIR/dist/lambda/lambdaAssets.zip" "s3://$deployment_assets_bucket_name/$lambda_key"
 
   echo "── Deploying CloudFormation stack (this will likely take ~15 minutes for first time deployment) ──"
@@ -170,7 +170,7 @@ cmd_teardown() {
 
   if [[ "$AUTO_APPROVE" != "true" ]]; then
     echo "This will delete the CapabilityInsightsForAWS stack and empty the website bucket."
-    read -p "Continue? (y/N): " confirm
+    read -rp "Continue? (y/N): " confirm
     [[ "$confirm" =~ ^[Yy]$ ]] || exit 0
   fi
 
