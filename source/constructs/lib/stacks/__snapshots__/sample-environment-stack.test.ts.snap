@@ -1,0 +1,393 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CloudFormation template matches snapshot 1`] = `
+{
+  "Outputs": {
+    "ApiAccessSubnetId": {
+      "Value": {
+        "Fn::GetAtt": [
+          "CapabilityInsightsSampleEnvironmentVpcPublicSubnet",
+          "SubnetId",
+        ],
+      },
+    },
+    "BackendSubnetId": {
+      "Value": {
+        "Fn::GetAtt": [
+          "CapabilityInsightsSampleEnvironmentVpcPrivateSubnet",
+          "SubnetId",
+        ],
+      },
+    },
+    "DeploymentAssetsBucketName": {
+      "Value": {
+        "Ref": "capabilityinsightsassets",
+      },
+    },
+    "PrivateVpcId": {
+      "Value": {
+        "Fn::GetAtt": [
+          "CapabilityInsightsSampleEnvironmentVpc",
+          "VpcId",
+        ],
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+    "LatestAmazonLinux2023AmiId": {
+      "Default": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
+      "Description": "Latest Amazon Linux 2023 AMI ID from SSM Parameter Store",
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+    },
+  },
+  "Resources": {
+    "CapabilityInsightsSampleEnvInstanceRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "IAM role for instances in the sample environment VPC.",
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsSampleEnvInstanceRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CapabilityInsightsSampleEnvironmentVpc": {
+      "Properties": {
+        "CidrBlock": "10.0.0.0/16",
+        "EnableDnsHostnames": true,
+        "EnableDnsSupport": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsSampleEnvironmentVpc",
+          },
+        ],
+      },
+      "Type": "AWS::EC2::VPC",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcIGW": {
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsSampleEnvironmentVpcIGW",
+          },
+        ],
+      },
+      "Type": "AWS::EC2::InternetGateway",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcIGWRoute": {
+      "Properties": {
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpcIGW",
+            "InternetGatewayId",
+          ],
+        },
+        "RouteTableId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpcPublicRouteTable",
+            "RouteTableId",
+          ],
+        },
+      },
+      "Type": "AWS::EC2::Route",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcIGWVPCAttachment": {
+      "Properties": {
+        "InternetGatewayId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpcIGW",
+            "InternetGatewayId",
+          ],
+        },
+        "VpcId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpc",
+            "VpcId",
+          ],
+        },
+      },
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcPrivateSubnet": {
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::GetAZs": "",
+            },
+          ],
+        },
+        "CidrBlock": "10.0.0.0/24",
+        "MapPublicIpOnLaunch": false,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsSampleEnvironmentVpcPrivateSubnet",
+          },
+        ],
+        "VpcId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpc",
+            "VpcId",
+          ],
+        },
+      },
+      "Type": "AWS::EC2::Subnet",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcPublicRouteTable": {
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsSampleEnvironmentVpcPublicRouteTable",
+          },
+        ],
+        "VpcId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpc",
+            "VpcId",
+          ],
+        },
+      },
+      "Type": "AWS::EC2::RouteTable",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcPublicSubnet": {
+      "Properties": {
+        "AvailabilityZone": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::GetAZs": "",
+            },
+          ],
+        },
+        "CidrBlock": "10.0.1.0/24",
+        "MapPublicIpOnLaunch": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsSampleEnvironmentVpcPublicSubnet",
+          },
+        ],
+        "VpcId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpc",
+            "VpcId",
+          ],
+        },
+      },
+      "Type": "AWS::EC2::Subnet",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcPublicSubnetLinuxInstance": {
+      "DependsOn": [
+        "CapabilityInsightsSampleEnvironmentVpcPublicSubnetLinuxInstanceProfile",
+      ],
+      "Properties": {
+        "IamInstanceProfile": "CapabilityInsightsSampleEnvironmentVpcPublicSubnetLinuxInstanceProfile",
+        "ImageId": {
+          "Ref": "LatestAmazonLinux2023AmiId",
+        },
+        "InstanceType": "t3.micro",
+        "SecurityGroupIds": [
+          {
+            "Fn::GetAtt": [
+              "CapabilityInsightsSampleEnvironmentVpcSSHSG",
+              "GroupId",
+            ],
+          },
+        ],
+        "SubnetId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpcPublicSubnet",
+            "SubnetId",
+          ],
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsSampleEnvironmentVpcPublicSubnetLinuxInstance",
+          },
+        ],
+      },
+      "Type": "AWS::EC2::Instance",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcPublicSubnetLinuxInstanceProfile": {
+      "DependsOn": [
+        "CapabilityInsightsSampleEnvInstanceRole",
+      ],
+      "Properties": {
+        "InstanceProfileName": "CapabilityInsightsSampleEnvironmentVpcPublicSubnetLinuxInstanceProfile",
+        "Roles": [
+          {
+            "Fn::Sub": "CapabilityInsightsSampleEnvInstanceRole-\${AWS::Region}",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::InstanceProfile",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcPublicSubnetRouteTableAssociation": {
+      "Properties": {
+        "RouteTableId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpcPublicRouteTable",
+            "RouteTableId",
+          ],
+        },
+        "SubnetId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpcPublicSubnet",
+            "SubnetId",
+          ],
+        },
+      },
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcS3Endpoint": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:GetObject",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Resource": {
+                "Fn::Sub": "arn:\${AWS::Partition}:s3:::capability-insights-website-\${AWS::AccountId}-\${AWS::Region}/*",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "RouteTableIds": [
+          {
+            "Fn::GetAtt": [
+              "CapabilityInsightsSampleEnvironmentVpcPublicRouteTable",
+              "RouteTableId",
+            ],
+          },
+        ],
+        "ServiceName": {
+          "Fn::Sub": "com.amazonaws.\${AWS::Region}.s3",
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsSampleEnvironmentVpcS3Endpoint",
+          },
+        ],
+        "VpcEndpointType": "Gateway",
+        "VpcId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpc",
+            "VpcId",
+          ],
+        },
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcSSHSG": {
+      "Properties": {
+        "GroupDescription": "Security Group for the CapabilityInsightsSampleEnvironmentVpc vpc that allows incoming SSH connections.",
+        "GroupName": "CapabilityInsightsSampleEnvironmentVpcSSHSG",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound traffic",
+            "IpProtocol": "-1",
+          },
+        ],
+        "SecurityGroupIngress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow incoming SSH from anywhere",
+            "FromPort": 22,
+            "IpProtocol": "tcp",
+            "ToPort": 22,
+          },
+        ],
+        "VpcId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpc",
+            "VpcId",
+          ],
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "capabilityinsightsassets": {
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256",
+              },
+            },
+          ],
+        },
+        "BucketName": {
+          "Fn::Sub": "capability-insights-assets-\${AWS::AccountId}-\${AWS::Region}",
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true,
+        },
+      },
+      "Type": "AWS::S3::Bucket",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
