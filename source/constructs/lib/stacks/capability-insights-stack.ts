@@ -209,14 +209,11 @@ export class CapabilityInsightsStack extends cdk.Stack {
             Statement: [
               {
                 Effect: 'Allow',
-                Action: ['s3:GetObject'],
+                Action: 's3:GetObject',
                 Resource: '*',
                 Condition: {
                   StringEquals: {
-                    's3:DataAccessPointAccount': cdk.Fn.select(
-                      4,
-                      cdk.Fn.split(':', sourceAccessPointArnParameter.valueAsString),
-                    ),
+                    's3:DataAccessPointArn': sourceAccessPointArnParameter.valueAsString,
                   },
                 },
               },

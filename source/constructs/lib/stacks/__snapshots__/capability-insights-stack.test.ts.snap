@@ -580,23 +580,11 @@ exports[`CloudFormation template matches snapshot 1`] = `
             "PolicyDocument": {
               "Statement": [
                 {
-                  "Action": [
-                    "s3:GetObject",
-                  ],
+                  "Action": "s3:GetObject",
                   "Condition": {
                     "StringEquals": {
-                      "s3:DataAccessPointAccount": {
-                        "Fn::Select": [
-                          4,
-                          {
-                            "Fn::Split": [
-                              ":",
-                              {
-                                "Ref": "SourceAccessPointArn",
-                              },
-                            ],
-                          },
-                        ],
+                      "s3:DataAccessPointArn": {
+                        "Ref": "SourceAccessPointArn",
                       },
                     },
                   },
