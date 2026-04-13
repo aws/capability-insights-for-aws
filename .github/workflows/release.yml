@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Get version
+        id: version
+        run: echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Package release artifacts
+        run: |
+          mkdir -p release-staging/build-assets/lambda release-staging/build-assets/website release-staging/build-assets/template
+          cp deployment/dist/lambda/lambdaAssets.zip release-staging/build-assets/lambda/
+          cp deployment/dist/template/capability-insights.template.json release-staging/build-assets/template/
+          cp -r deployment/dist/website/. release-staging/build-assets/website/
+          cd release-staging/build-assets && zip -r ../../build-assets.zip .
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          make_latest: true
+          files: build-assets.zip

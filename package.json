@@ -1,0 +1,40 @@
+{
+  "name": "capability-insights-for-aws",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "workspaces": [
+    "source/shared",
+    "source/lambda",
+    "source/constructs",
+    "source/website"
+  ],
+  "scripts": {
+    "prebuild": "rm -rf deployment/dist && mkdir -p deployment/dist/template deployment/dist/lambda deployment/dist/website",
+    "build": "npm run build --workspaces",
+    "postbuild": "npm run package --workspaces --if-present",
+    "lint": "eslint --cache source/ && prettier --check --cache .",
+    "format": "eslint --fix --cache source/ && prettier --write --cache .",
+    "test": "npm run test --workspaces --if-present",
+    "release": "npm run build && npm run format && npm run lint",
+    "clean": "npm run clean --workspaces --if-present && rm -rf node_modules package-lock.json deployment/dist",
+    "deploy": "npm run build && ./deployment/deploy.sh deploy",
+    "teardown": "npm run build && ./deployment/deploy.sh teardown",
+    "dev:setup": "npm run build && ./deployment/dev.sh setup",
+    "dev:deploy": "npm run build && ./deployment/dev.sh deploy",
+    "dev:teardown": "npm run build && ./deployment/dev.sh teardown",
+    "server": "npm run dev --workspace=source/website"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "@types/node": "^22",
+    "eslint": "^9.12.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.3.3",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.44.0"
+  },
+  "npm-pretty-much": {
+    "runRelease": "always"
+  }
+}

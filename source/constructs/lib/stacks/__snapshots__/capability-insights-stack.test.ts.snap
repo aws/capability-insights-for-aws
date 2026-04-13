@@ -1,0 +1,893 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CloudFormation template matches snapshot 1`] = `
+{
+  "Parameters": {
+    "ApiAccessSubnetId": {
+      "Description": "ID of Subnet where users will browse Capability Insights website from, calls to back-end API will come from here. A VPC Endpoint to API Gateway will be created in this subnet to enable this.",
+      "Type": "AWS::EC2::Subnet::Id",
+    },
+    "BackendSubnetId": {
+      "Description": "ID of subnet (ideally a private subnet) where the Lambda function will be running.",
+      "Type": "AWS::EC2::Subnet::Id",
+    },
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+    "DeploymentAssetsBucketApiLambdaFunctionCodeZipPath": {
+      "Default": "lambdaAssets.zip",
+      "Description": "Path in the CapabilityInsights deployment assets bucket where Capability Insights's API Lambda function code zip is located.",
+      "Type": "String",
+    },
+    "DeploymentAssetsBucketName": {
+      "Description": "Name of S3 bucket where Capability Insights deployment assets will be located.",
+      "Type": "String",
+    },
+    "PrivateVpcId": {
+      "Description": "ID of VPC from where the Capability Insights website (hosted on S3 bucket) will be accessible from.",
+      "Type": "AWS::EC2::VPC::Id",
+    },
+    "SourceAccessPointArn": {
+      "Description": "ARN of the S3 access point that provides the capability data source.",
+      "Type": "String",
+    },
+    "SourceFolders": {
+      "AllowedPattern": "^[a-zA-Z0-9_-]+(,[a-zA-Z0-9_-]+)*$",
+      "ConstraintDescription": "Must be a comma-separated list of folder names (letters, numbers, hyphens, underscores). No spaces or trailing commas.",
+      "Default": "public",
+      "Description": "Comma-separated list of folder names in the S3 access point to fetch data from.",
+      "Type": "String",
+    },
+  },
+  "Resources": {
+    "CapabilityInsightsApiGw": {
+      "Properties": {
+        "Description": "Private REST API for Capability Insights",
+        "EndpointConfiguration": {
+          "Types": [
+            "PRIVATE",
+          ],
+          "VpcEndpointIds": [
+            {
+              "Ref": "CapabilityInsightsApiGwVpcEndpoint",
+            },
+          ],
+        },
+        "Name": "CapabilityInsightsApiGw",
+        "Policy": {
+          "Statement": [
+            {
+              "Action": "execute-api:Invoke",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceVpce": {
+                    "Ref": "CapabilityInsightsApiGwVpcEndpoint",
+                  },
+                },
+              },
+              "Effect": "Allow",
+              "Principal": "*",
+              "Resource": "*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+      },
+      "Type": "AWS::ApiGateway::RestApi",
+    },
+    "CapabilityInsightsApiGwAccessLogGroup": {
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": [
+            "/aws/apigateway/\${ApiId}/access-logs",
+            {
+              "ApiId": {
+                "Fn::GetAtt": [
+                  "CapabilityInsightsApiGw",
+                  "RestApiId",
+                ],
+              },
+            },
+          ],
+        },
+        "RetentionInDays": 30,
+      },
+      "Type": "AWS::Logs::LogGroup",
+    },
+    "CapabilityInsightsApiGwAccount": {
+      "DependsOn": [
+        "CapabilityInsightsApiGwCloudWatchLogsRole",
+      ],
+      "Properties": {
+        "CloudWatchRoleArn": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsApiGwCloudWatchLogsRole",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::ApiGateway::Account",
+    },
+    "CapabilityInsightsApiGwCloudWatchLogsRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "apigateway.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsApiGwCloudWatchLogsRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CapabilityInsightsApiGwDeployment": {
+      "DependsOn": [
+        "CapabilityInsightsApiGwProxyMethod",
+        "CapabilityInsightsApiGwProxyOptionsMethod",
+      ],
+      "Properties": {
+        "Description": "Deployment for CapabilityInsights API Gateway",
+        "RestApiId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsApiGw",
+            "RestApiId",
+          ],
+        },
+      },
+      "Type": "AWS::ApiGateway::Deployment",
+    },
+    "CapabilityInsightsApiGwExecutionLogGroup": {
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": [
+            "API-Gateway-Execution-Logs_\${ApiId}/prod",
+            {
+              "ApiId": {
+                "Fn::GetAtt": [
+                  "CapabilityInsightsApiGw",
+                  "RestApiId",
+                ],
+              },
+            },
+          ],
+        },
+        "RetentionInDays": 30,
+      },
+      "Type": "AWS::Logs::LogGroup",
+    },
+    "CapabilityInsightsApiGwProxyMethod": {
+      "Properties": {
+        "AuthorizationType": "NONE",
+        "HttpMethod": "ANY",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Sub": [
+              "arn:\${AWS::Partition}:apigateway:\${AWS::Region}:lambda:path/2015-03-31/functions/\${LambdaArn}/invocations",
+              {
+                "LambdaArn": {
+                  "Fn::GetAtt": [
+                    "CapabilityInsightsApiLambda",
+                    "Arn",
+                  ],
+                },
+              },
+            ],
+          },
+        },
+        "ResourceId": {
+          "Ref": "CapabilityInsightsApiGwProxyResource",
+        },
+        "RestApiId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsApiGw",
+            "RestApiId",
+          ],
+        },
+      },
+      "Type": "AWS::ApiGateway::Method",
+    },
+    "CapabilityInsightsApiGwProxyOptionsMethod": {
+      "Properties": {
+        "AuthorizationType": "NONE",
+        "HttpMethod": "OPTIONS",
+        "Integration": {
+          "IntegrationResponses": [
+            {
+              "ResponseParameters": {
+                "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+                "method.response.header.Access-Control-Allow-Methods": "'GET,POST,PUT,DELETE,OPTIONS'",
+                "method.response.header.Access-Control-Allow-Origin": "'*'",
+              },
+              "ResponseTemplates": {
+                "application/json": "",
+              },
+              "StatusCode": "200",
+            },
+          ],
+          "RequestTemplates": {
+            "application/json": "{"statusCode": 200}",
+          },
+          "Type": "MOCK",
+        },
+        "MethodResponses": [
+          {
+            "ResponseParameters": {
+              "method.response.header.Access-Control-Allow-Headers": true,
+              "method.response.header.Access-Control-Allow-Methods": true,
+              "method.response.header.Access-Control-Allow-Origin": true,
+            },
+            "StatusCode": "200",
+          },
+        ],
+        "ResourceId": {
+          "Ref": "CapabilityInsightsApiGwProxyResource",
+        },
+        "RestApiId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsApiGw",
+            "RestApiId",
+          ],
+        },
+      },
+      "Type": "AWS::ApiGateway::Method",
+    },
+    "CapabilityInsightsApiGwProxyResource": {
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsApiGw",
+            "RootResourceId",
+          ],
+        },
+        "PathPart": "{proxy+}",
+        "RestApiId": {
+          "Ref": "CapabilityInsightsApiGw",
+        },
+      },
+      "Type": "AWS::ApiGateway::Resource",
+    },
+    "CapabilityInsightsApiGwSecurityGroup": {
+      "Properties": {
+        "GroupDescription": "Security Group for CapabilityInsights API Gateway",
+        "GroupName": "CapabilityInsightsApiGwSecurityGroup",
+        "SecurityGroupIngress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "FromPort": 443,
+            "IpProtocol": "tcp",
+            "ToPort": 443,
+          },
+        ],
+        "VpcId": {
+          "Ref": "PrivateVpcId",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "CapabilityInsightsApiGwStage": {
+      "DependsOn": [
+        "CapabilityInsightsApiGwAccount",
+      ],
+      "Properties": {
+        "AccessLogSetting": {
+          "DestinationArn": {
+            "Fn::GetAtt": [
+              "CapabilityInsightsApiGwAccessLogGroup",
+              "Arn",
+            ],
+          },
+          "Format": "$context.requestId $context.extendedRequestId $context.identity.sourceIp $context.requestTime $context.routeKey $context.status",
+        },
+        "DeploymentId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsApiGwDeployment",
+            "DeploymentId",
+          ],
+        },
+        "Description": "Production stage with CloudWatch logging",
+        "MethodSettings": [
+          {
+            "DataTraceEnabled": false,
+            "HttpMethod": "*",
+            "LoggingLevel": "INFO",
+            "MetricsEnabled": true,
+            "ResourcePath": "/*",
+          },
+        ],
+        "RestApiId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsApiGw",
+            "RestApiId",
+          ],
+        },
+        "StageName": "prod",
+      },
+      "Type": "AWS::ApiGateway::Stage",
+    },
+    "CapabilityInsightsApiGwVpcEndpoint": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "CapabilityInsightsApiGwSecurityGroup",
+          },
+        ],
+        "ServiceName": {
+          "Fn::Sub": "com.amazonaws.\${AWS::Region}.execute-api",
+        },
+        "SubnetIds": [
+          {
+            "Ref": "ApiAccessSubnetId",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsApiGwVpcEndpoint",
+          },
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": {
+          "Ref": "PrivateVpcId",
+        },
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "CapabilityInsightsApiLambda": {
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "DeploymentAssetsBucketName",
+          },
+          "S3Key": {
+            "Ref": "DeploymentAssetsBucketApiLambdaFunctionCodeZipPath",
+          },
+        },
+        "Environment": {
+          "Variables": {
+            "DATA_FETCH_LAMBDA_NAME": "CapabilityInsightsDataFetchLambda",
+            "WEBSITE_BUCKET_NAME": {
+              "Ref": "capabilityinsightswebsite",
+            },
+          },
+        },
+        "FunctionName": "CapabilityInsightsApiLambda",
+        "Handler": "api-lambda-main.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsApiLambdaRole",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 60,
+        "VpcConfig": {
+          "SecurityGroupIds": [
+            {
+              "Ref": "CapabilityInsightsApiLambdaSecurityGroup",
+            },
+          ],
+          "SubnetIds": [
+            {
+              "Ref": "BackendSubnetId",
+            },
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CapabilityInsightsApiLambdaInvokePermission": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "CapabilityInsightsApiLambda",
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": [
+            "arn:\${AWS::Partition}:execute-api:\${AWS::Region}:\${AWS::AccountId}:\${ApiId}/*",
+            {
+              "ApiId": {
+                "Fn::GetAtt": [
+                  "CapabilityInsightsApiGw",
+                  "RestApiId",
+                ],
+              },
+            },
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "CapabilityInsightsApiLambdaRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+          },
+        ],
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:\${AWS::Partition}:logs:\${AWS::Region}:\${AWS::AccountId}:log-group:/aws/lambda/\${FunctionName}:*",
+                      {
+                        "FunctionName": "CapabilityInsightsApiLambda",
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "LambdaLogging",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "lambda:InvokeFunction",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:\${AWS::Partition}:lambda:\${AWS::Region}:\${AWS::AccountId}:function:\${FunctionName}",
+                      {
+                        "FunctionName": "CapabilityInsightsDataFetchLambda",
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "InvokeDataFetchLambda",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsApiLambdaRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CapabilityInsightsApiLambdaSecurityGroup": {
+      "Properties": {
+        "GroupDescription": "Security group for CapabilityInsights API Lambda",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "IpProtocol": "-1",
+          },
+        ],
+        "VpcId": {
+          "Ref": "PrivateVpcId",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "CapabilityInsightsDataFetchLambda": {
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "DeploymentAssetsBucketName",
+          },
+          "S3Key": {
+            "Ref": "DeploymentAssetsBucketApiLambdaFunctionCodeZipPath",
+          },
+        },
+        "Environment": {
+          "Variables": {
+            "DATA_BUCKET_NAME": {
+              "Ref": "capabilityinsightswebsite",
+            },
+            "DATA_BUCKET_PATH": "data",
+            "SOURCE_ACCESS_POINT_ARN": {
+              "Ref": "SourceAccessPointArn",
+            },
+            "SOURCE_FOLDERS": {
+              "Ref": "SourceFolders",
+            },
+          },
+        },
+        "FunctionName": "CapabilityInsightsDataFetchLambda",
+        "Handler": "data-fetch-lambda-main.handler",
+        "MemorySize": 2048,
+        "Role": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsDataFetchLambdaRole",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 120,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CapabilityInsightsDataFetchLambdaInvokePermission": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "CapabilityInsightsDataFetchLambda",
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsDataFetchLambdaScheduleRule",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "CapabilityInsightsDataFetchLambdaRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          },
+        ],
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "s3:GetObject",
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:DataAccessPointArn": {
+                        "Ref": "SourceAccessPointArn",
+                      },
+                    },
+                  },
+                  "Effect": "Allow",
+                  "Resource": "*",
+                },
+                {
+                  "Action": [
+                    "s3:PutObject",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "\${BucketArn}/data/*",
+                      {
+                        "BucketArn": {
+                          "Fn::GetAtt": [
+                            "capabilityinsightswebsite",
+                            "Arn",
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "S3ReadWritePolicy",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsDataFetchLambdaRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CapabilityInsightsDataFetchLambdaScheduleRule": {
+      "Properties": {
+        "Description": "Daily trigger for CapabilityInsightsDataFetchLambda lambda function.",
+        "ScheduleExpression": "rate(1 day)",
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Arn": {
+              "Fn::GetAtt": [
+                "CapabilityInsightsDataFetchLambda",
+                "Arn",
+              ],
+            },
+            "Id": "ScheduledLambdaTarget",
+          },
+        ],
+      },
+      "Type": "AWS::Events::Rule",
+    },
+    "CapabilityInsightsLambdaVpcEndpoint": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "CapabilityInsightsApiGwSecurityGroup",
+          },
+        ],
+        "ServiceName": {
+          "Fn::Sub": "com.amazonaws.\${AWS::Region}.lambda",
+        },
+        "SubnetIds": [
+          {
+            "Ref": "BackendSubnetId",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsLambdaVpcEndpoint",
+          },
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": {
+          "Ref": "PrivateVpcId",
+        },
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
+    "CapabilityInsightsWriteConfigLambda": {
+      "Properties": {
+        "Code": {
+          "ZipFile": "import json
+import boto3
+import cfnresponse
+
+s3 = boto3.client('s3')
+
+def lambda_handler(event, context):
+    try:
+        if event['RequestType'] == 'Delete':
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            return
+        
+        bucket = event['ResourceProperties']['Bucket']
+        api_url = event['ResourceProperties']['ApiUrl']
+        
+        config = {
+            'apiBaseUrl': api_url
+        }
+        
+        s3.put_object(
+            Bucket=bucket,
+            Key='api-config.json',
+            Body=json.dumps(config),
+            ContentType='application/json'
+        )
+        
+        cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        cfnresponse.send(event, context, cfnresponse.FAILED, {})",
+        },
+        "FunctionName": "CapabilityInsightsWriteConfigLambda",
+        "Handler": "index.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsWriteConfigLambdaRole",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.11",
+        "Timeout": 30,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CapabilityInsightsWriteConfigLambdaCustomResource": {
+      "Properties": {
+        "ApiUrl": {
+          "Fn::Sub": [
+            "https://\${ApiId}.execute-api.\${AWS::Region}.amazonaws.com/prod",
+            {
+              "ApiId": {
+                "Fn::GetAtt": [
+                  "CapabilityInsightsApiGw",
+                  "RestApiId",
+                ],
+              },
+            },
+          ],
+        },
+        "Bucket": {
+          "Fn::Sub": "capability-insights-website-\${AWS::AccountId}-\${AWS::Region}",
+        },
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsWriteConfigLambda",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::CloudFormation::CustomResource",
+    },
+    "CapabilityInsightsWriteConfigLambdaRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          },
+        ],
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "s3:PutObject",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": "arn:\${AWS::Partition}:s3:::capability-insights-website-\${AWS::AccountId}-\${AWS::Region}/*",
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "S3WriteAccess",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsWriteConfigLambdaRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "capabilityinsightswebsite": {
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256",
+              },
+            },
+          ],
+        },
+        "BucketName": {
+          "Fn::Sub": "capability-insights-website-\${AWS::AccountId}-\${AWS::Region}",
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true,
+        },
+        "WebsiteConfiguration": {
+          "ErrorDocument": "index.html",
+          "IndexDocument": "index.html",
+        },
+      },
+      "Type": "AWS::S3::Bucket",
+    },
+    "capabilityinsightswebsitePolicy": {
+      "Properties": {
+        "Bucket": {
+          "Ref": "capabilityinsightswebsite",
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:GetObject",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceVpc": {
+                    "Ref": "PrivateVpcId",
+                  },
+                },
+              },
+              "Effect": "Allow",
+              "Principal": "*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "capabilityinsightswebsite",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Sub": [
+                    "\${BucketArn}/*",
+                    {
+                      "BucketArn": {
+                        "Fn::GetAtt": [
+                          "capabilityinsightswebsite",
+                          "Arn",
+                        ],
+                      },
+                    },
+                  ],
+                },
+              ],
+              "Sid": "AllowVPCEndpointAccess",
+            },
+          ],
+        },
+      },
+      "Type": "AWS::S3::BucketPolicy",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;

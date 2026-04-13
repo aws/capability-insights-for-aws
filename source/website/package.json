@@ -1,0 +1,31 @@
+{
+  "name": "@capability-insights/website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "react-router build && rm -rf dist && mv dist_build/client dist && rm -rf dist_build",
+    "clean": "rm -rf dist dist_build .react-router",
+    "package": "cp -r dist/. ../../deployment/dist/website/",
+    "dev": "react-router dev",
+    "start": "react-router-serve ./build/server/index.js",
+    "typecheck": "react-router typegen && tsc"
+  },
+  "dependencies": {
+    "@cloudscape-design/collection-hooks": "^1.0.82",
+    "@cloudscape-design/components": "^3.0.1206",
+    "@cloudscape-design/global-styles": "^1.0.50",
+    "@react-router/node": "7.13.2",
+    "@react-router/serve": "7.13.2",
+    "isbot": "^5.1.31",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router": "7.13.2"
+  },
+  "devDependencies": {
+    "@react-router/dev": "7.13.2",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "vite": "^7.1.7",
+    "vite-tsconfig-paths": "^5.1.4"
+  }
+}
