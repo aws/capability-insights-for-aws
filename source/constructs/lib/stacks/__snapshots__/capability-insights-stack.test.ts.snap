@@ -2,7 +2,41 @@
 
 exports[`CloudFormation template matches snapshot 1`] = `
 {
+  "Conditions": {
+    "HasAnalysisStateMachine": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "AnalysisStateMachineArn",
+            },
+            "",
+          ],
+        },
+      ],
+    },
+  },
+  "Outputs": {
+    "WebsiteBucketArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "capabilityinsightswebsite",
+          "Arn",
+        ],
+      },
+    },
+    "WebsiteBucketName": {
+      "Value": {
+        "Ref": "capabilityinsightswebsite",
+      },
+    },
+  },
   "Parameters": {
+    "AnalysisStateMachineArn": {
+      "Default": "",
+      "Description": "ARN of the Usage Analysis Step Functions state machine. Leave empty if Usage Analysis stack is not yet deployed.",
+      "Type": "String",
+    },
     "ApiAccessSubnetId": {
       "Description": "ID of Subnet where users will browse Capability Insights website from, calls to back-end API will come from here. A VPC Endpoint to API Gateway will be created in this subnet to enable this.",
       "Type": "AWS::EC2::Subnet::Id",
@@ -15,6 +49,11 @@ exports[`CloudFormation template matches snapshot 1`] = `
       "Default": "/cdk-bootstrap/hnb659fds/version",
       "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
       "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+    "CloudTrailAnalyzerLambdaName": {
+      "Default": "",
+      "Description": "Name of the CloudTrail Analyzer Lambda function.",
+      "Type": "String",
     },
     "DeploymentAssetsBucketApiLambdaFunctionCodeZipPath": {
       "Default": "lambdaAssets.zip",
@@ -362,6 +401,12 @@ exports[`CloudFormation template matches snapshot 1`] = `
         },
         "Environment": {
           "Variables": {
+            "ANALYSIS_STATE_MACHINE_ARN": {
+              "Ref": "AnalysisStateMachineArn",
+            },
+            "CLOUDTRAIL_ANALYZER_LAMBDA_NAME": {
+              "Ref": "CloudTrailAnalyzerLambdaName",
+            },
             "DATA_FETCH_LAMBDA_NAME": "CapabilityInsightsDataFetchLambda",
             "WEBSITE_BUCKET_NAME": {
               "Ref": "capabilityinsightswebsite",
@@ -479,6 +524,48 @@ exports[`CloudFormation template matches snapshot 1`] = `
               "Version": "2012-10-17",
             },
             "PolicyName": "InvokeDataFetchLambda",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "states:StartExecution",
+                    "states:DescribeExecution",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::If": [
+                      "HasAnalysisStateMachine",
+                      {
+                        "Ref": "AnalysisStateMachineArn",
+                      },
+                      {
+                        "Fn::Sub": "arn:\${AWS::Partition}:states:\${AWS::Region}:\${AWS::AccountId}:stateMachine:none",
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "StepFunctionsAccess",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "organizations:ListAccounts",
+                    "organizations:DescribeOrganization",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": "*",
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "OrganizationsReadAccess",
           },
         ],
         "RoleName": {
@@ -670,6 +757,35 @@ exports[`CloudFormation template matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::VPCEndpoint",
     },
+    "CapabilityInsightsStepFunctionsVpcEndpoint": {
+      "Properties": {
+        "PrivateDnsEnabled": true,
+        "SecurityGroupIds": [
+          {
+            "Ref": "CapabilityInsightsApiGwSecurityGroup",
+          },
+        ],
+        "ServiceName": {
+          "Fn::Sub": "com.amazonaws.\${AWS::Region}.states",
+        },
+        "SubnetIds": [
+          {
+            "Ref": "BackendSubnetId",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsStepFunctionsVpcEndpoint",
+          },
+        ],
+        "VpcEndpointType": "Interface",
+        "VpcId": {
+          "Ref": "PrivateVpcId",
+        },
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
     "CapabilityInsightsWriteConfigLambda": {
       "Properties": {
         "Code": {
@@ -733,7 +849,7 @@ def lambda_handler(event, context):
           ],
         },
         "Bucket": {
-          "Fn::Sub": "capability-insights-website-\${AWS::AccountId}-\${AWS::Region}",
+          "Ref": "capabilityinsightswebsite",
         },
         "ServiceToken": {
           "Fn::GetAtt": [
@@ -773,7 +889,17 @@ def lambda_handler(event, context):
                   ],
                   "Effect": "Allow",
                   "Resource": {
-                    "Fn::Sub": "arn:\${AWS::Partition}:s3:::capability-insights-website-\${AWS::AccountId}-\${AWS::Region}/*",
+                    "Fn::Sub": [
+                      "\${BucketArn}/*",
+                      {
+                        "BucketArn": {
+                          "Fn::GetAtt": [
+                            "capabilityinsightswebsite",
+                            "Arn",
+                          ],
+                        },
+                      },
+                    ],
                   },
                 },
               ],
