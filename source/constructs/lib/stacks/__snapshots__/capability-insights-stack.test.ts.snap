@@ -50,6 +50,11 @@ exports[`CloudFormation template matches snapshot 1`] = `
       "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
       "Type": "AWS::SSM::Parameter::Value<String>",
     },
+    "CloudFormationAnalyzerLambdaName": {
+      "Default": "",
+      "Description": "Name of the CloudFormation Analyzer Lambda function.",
+      "Type": "String",
+    },
     "CloudTrailAnalyzerLambdaName": {
       "Default": "",
       "Description": "Name of the CloudTrail Analyzer Lambda function.",
@@ -403,6 +408,9 @@ exports[`CloudFormation template matches snapshot 1`] = `
           "Variables": {
             "ANALYSIS_STATE_MACHINE_ARN": {
               "Ref": "AnalysisStateMachineArn",
+            },
+            "CLOUDFORMATION_ANALYZER_LAMBDA_NAME": {
+              "Ref": "CloudFormationAnalyzerLambdaName",
             },
             "CLOUDTRAIL_ANALYZER_LAMBDA_NAME": {
               "Ref": "CloudTrailAnalyzerLambdaName",

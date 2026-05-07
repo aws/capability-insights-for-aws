@@ -173,15 +173,32 @@ cmd_deploy() {
     echo "  ✓ Usage Analysis stack deployed."
 
     # Get outputs from Usage Analysis stack
-    local analysis_state_machine_arn cloudtrail_analyzer_lambda_name
+    local analysis_state_machine_arn cloudtrail_analyzer_lambda_name cloudformation_analyzer_lambda_name
     analysis_state_machine_arn=$(aws cloudformation describe-stacks \
       --stack-name CapabilityInsightsUsageAnalysis \
       --query "Stacks[0].Outputs[?OutputKey=='AnalysisStateMachineArn'].OutputValue" --output text 2>/dev/null || echo "")
     cloudtrail_analyzer_lambda_name=$(aws cloudformation describe-stacks \
       --stack-name CapabilityInsightsUsageAnalysis \
       --query "Stacks[0].Outputs[?OutputKey=='CloudTrailAnalyzerLambdaName'].OutputValue" --output text 2>/dev/null || echo "")
+    cloudformation_analyzer_lambda_name=$(aws cloudformation describe-stacks \
+      --stack-name CapabilityInsightsUsageAnalysis \
+      --query "Stacks[0].Outputs[?OutputKey=='CloudFormationAnalyzerLambdaName'].OutputValue" --output text 2>/dev/null || echo "")
 
-    if [[ -n "$analysis_state_machine_arn" && -n "$cloudtrail_analyzer_lambda_name" ]]; then
+    # Force Lambda code update (CloudFormation may skip if template is unchanged)
+    if [[ -n "$cloudtrail_analyzer_lambda_name" ]]; then
+      aws lambda update-function-code \
+        --function-name "$cloudtrail_analyzer_lambda_name" \
+        --s3-bucket "$deployment_assets_bucket_name" \
+        --s3-key "$lambda_key" > /dev/null 2>&1 || true
+    fi
+    if [[ -n "$cloudformation_analyzer_lambda_name" ]]; then
+      aws lambda update-function-code \
+        --function-name "$cloudformation_analyzer_lambda_name" \
+        --s3-bucket "$deployment_assets_bucket_name" \
+        --s3-key "$lambda_key" > /dev/null 2>&1 || true
+    fi
+
+    if [[ -n "$analysis_state_machine_arn" && -n "$cloudtrail_analyzer_lambda_name" && -n "$cloudformation_analyzer_lambda_name" ]]; then
       echo "── Updating Insights stack with Usage Analysis outputs ──"
       aws cloudformation deploy \
         --template-file "$SCRIPT_DIR/dist/template/capability-insights.template.json" \
@@ -196,6 +213,7 @@ cmd_deploy() {
           SourceFolders="$source_folders" \
           AnalysisStateMachineArn="$analysis_state_machine_arn" \
           CloudTrailAnalyzerLambdaName="$cloudtrail_analyzer_lambda_name" \
+          CloudFormationAnalyzerLambdaName="$cloudformation_analyzer_lambda_name" \
         --capabilities CAPABILITY_NAMED_IAM \
         --no-cli-pager || true
       echo "  ✓ Insights stack updated with analysis integration."

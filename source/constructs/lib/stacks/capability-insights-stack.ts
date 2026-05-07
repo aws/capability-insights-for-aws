@@ -16,6 +16,7 @@ export interface CapabilityInsightsStackProps extends cdk.StackProps {
   sourceFolders?: string;
   analysisStateMachineArn?: string;
   cloudTrailAnalyzerLambdaName?: string;
+  cloudFormationAnalyzerLambdaName?: string;
 }
 
 export enum CapabilityInsightsStackOutputs {
@@ -91,6 +92,12 @@ export class CapabilityInsightsStack extends cdk.Stack {
       type: 'String',
       description: 'Name of the CloudTrail Analyzer Lambda function.',
       default: props?.cloudTrailAnalyzerLambdaName ?? '',
+    });
+
+    const cloudformationAnalyzerLambdaNameParameter = new cdk.CfnParameter(this, 'CloudFormationAnalyzerLambdaName', {
+      type: 'String',
+      description: 'Name of the CloudFormation Analyzer Lambda function.',
+      default: props?.cloudFormationAnalyzerLambdaName ?? '',
     });
 
     const sourceFoldersParameter = new cdk.CfnParameter(this, 'SourceFolders', {
@@ -426,6 +433,7 @@ export class CapabilityInsightsStack extends cdk.Stack {
           WEBSITE_BUCKET_NAME: cdk.Fn.ref(websiteBucket.logicalId),
           DATA_FETCH_LAMBDA_NAME: dataFetchLambdaName,
           CLOUDTRAIL_ANALYZER_LAMBDA_NAME: cloudTrailAnalyzerLambdaNameParameter.valueAsString,
+          CLOUDFORMATION_ANALYZER_LAMBDA_NAME: cloudformationAnalyzerLambdaNameParameter.valueAsString,
           ANALYSIS_STATE_MACHINE_ARN: analysisStateMachineArnParameter.valueAsString,
         },
       },

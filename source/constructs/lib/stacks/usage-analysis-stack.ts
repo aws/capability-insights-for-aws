@@ -14,6 +14,7 @@ export interface UsageAnalysisStackProps extends cdk.StackProps {
 
 export enum UsageAnalysisStackOutputs {
   CloudTrailAnalyzerLambdaName = 'CloudTrailAnalyzerLambdaName',
+  CloudFormationAnalyzerLambdaName = 'CloudFormationAnalyzerLambdaName',
   AnalysisStateMachineArn = 'AnalysisStateMachineArn',
 }
 
@@ -300,6 +301,83 @@ export class UsageAnalysisStack extends cdk.Stack {
       memorySize: 512,
     });
 
+    // CloudFormation Analyzer Lambda
+    //
+    // Security note: this Lambda reads every active CloudFormation stack's
+    // processed template in the account via cloudformation:GetTemplate. Templates
+    // may contain sensitive configuration (resource ARNs, VPC/subnet IDs, KMS
+    // key references, etc.). The analyzer only extracts scalar property values
+    // (strings, numbers, booleans) and resource types; nested objects and arrays
+    // are ignored. Output is written to the website bucket's usage/ prefix,
+    // which is only accessible from within the configured VPC.
+    const cloudformationAnalyzerLambdaName = `${prefix}CloudFormationAnalyzer`;
+    const cloudformationAnalyzerRole = new iam.CfnRole(this, `${cloudformationAnalyzerLambdaName}Role`, {
+      roleName: cdk.Fn.sub(`${cloudformationAnalyzerLambdaName}Role-\${AWS::Region}`),
+      assumeRolePolicyDocument: {
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Service: 'lambda.amazonaws.com' },
+            Action: 'sts:AssumeRole',
+          },
+        ],
+      },
+      managedPolicyArns: [cdk.Fn.sub('arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole')],
+      policies: [
+        {
+          policyName: 'CloudFormationRead',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: ['cloudformation:ListStacks', 'cloudformation:GetTemplate', 'cloudformation:DescribeStacks'],
+                // Resource '*' is required: ListStacks does not support resource-level
+                // permissions, and we need to scan all stacks in the account.
+                Resource: '*',
+              },
+            ],
+          },
+        },
+        {
+          policyName: 'S3WriteAccess',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: ['s3:PutObject'],
+                Resource: [
+                  cdk.Fn.sub('${BucketArn}/usage/*', {
+                    BucketArn: websiteBucketArnParameter.valueAsString,
+                  }),
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const cloudformationAnalyzerLambda = new lambda.CfnFunction(this, cloudformationAnalyzerLambdaName, {
+      functionName: cloudformationAnalyzerLambdaName,
+      runtime: 'nodejs24.x',
+      handler: 'cloudformation-analyzer.handler',
+      role: cdk.Fn.getAtt(cloudformationAnalyzerRole.logicalId, 'Arn').toString(),
+      code: {
+        s3Bucket: deploymentAssetsBucketNameParameter.valueAsString,
+        s3Key: lambdaCodeZipPathParameter.valueAsString,
+      },
+      timeout: 300,
+      environment: {
+        variables: {
+          WEBSITE_BUCKET_NAME: websiteBucketNameParameter.valueAsString,
+        },
+      },
+      memorySize: 512,
+    });
+
     // Step Functions State Machine for Analysis
     const stateMachineRole = new iam.Role(this, `${prefix}AnalysisStateMachineRole`, {
       assumedBy: new iam.ServicePrincipal('states.amazonaws.com'),
@@ -308,21 +386,118 @@ export class UsageAnalysisStack extends cdk.Stack {
           statements: [
             new iam.PolicyStatement({
               actions: ['lambda:InvokeFunction'],
-              resources: [cdk.Fn.getAtt(cloudtrailAnalyzerLambda.logicalId, 'Arn').toString()],
+              resources: [
+                cdk.Fn.getAtt(cloudtrailAnalyzerLambda.logicalId, 'Arn').toString(),
+                cdk.Fn.getAtt(cloudformationAnalyzerLambda.logicalId, 'Arn').toString(),
+              ],
             }),
           ],
         }),
       },
     });
 
+    // Step Functions State Machine definition
+    //
+    // Error handling strategy:
+    // - Retry: each analyzer task retries up to 3 times on transient Lambda
+    //   errors (throttling, service exceptions) with exponential backoff.
+    // - Catch: if a task still fails, the error is captured in the branch
+    //   output as { analyzer, status: 'failed', error } rather than failing
+    //   the entire parallel execution. Other analyzers continue to run.
+    //
+    // Failures are observable via:
+    // - Lambda CloudWatch Logs (structured logs from the logger utility)
+    // - Step Functions execution history (full retry attempts and error details)
+    // - The /analysis GET endpoint response (returns the captured error)
+    //
+    // Proactive alerting (CloudWatch alarms, SNS notifications) is intentionally
+    // not included here — it's a deployment concern that should be configured
+    // per environment based on the consumer's operational requirements.
     const stateMachineDefinition = {
       Comment: 'Analysis workflow for CloudTrail, Resource Explorer, and CloudFormation',
-      StartAt: 'CloudTrailAnalyzer',
+      StartAt: 'ParallelAnalyzers',
       States: {
-        CloudTrailAnalyzer: {
-          Type: 'Task',
-          Resource: cdk.Fn.getAtt(cloudtrailAnalyzerLambda.logicalId, 'Arn').toString(),
+        ParallelAnalyzers: {
+          Type: 'Parallel',
           End: true,
+          Branches: [
+            {
+              StartAt: 'CloudTrailAnalyzer',
+              States: {
+                CloudTrailAnalyzer: {
+                  Type: 'Task',
+                  Resource: cdk.Fn.getAtt(cloudtrailAnalyzerLambda.logicalId, 'Arn').toString(),
+                  // Match Lambda timeout so Step Functions fails fast if the
+                  // task hangs. Kept in sync with the Lambda's timeout property.
+                  TimeoutSeconds: cloudtrailAnalyzerLambda.timeout,
+                  Retry: [
+                    {
+                      ErrorEquals: [
+                        'Lambda.ServiceException',
+                        'Lambda.AWSLambdaException',
+                        'Lambda.SdkClientException',
+                        'Lambda.TooManyRequestsException',
+                      ],
+                      IntervalSeconds: 2,
+                      MaxAttempts: 3,
+                      BackoffRate: 2,
+                    },
+                  ],
+                  Catch: [
+                    {
+                      ErrorEquals: ['States.ALL'],
+                      Next: 'CloudTrailFailed',
+                      ResultPath: '$.error',
+                    },
+                  ],
+                  End: true,
+                },
+                CloudTrailFailed: {
+                  Type: 'Pass',
+                  Parameters: { analyzer: 'cloudtrail', status: 'failed', 'error.$': '$.error' },
+                  End: true,
+                },
+              },
+            },
+            {
+              StartAt: 'CloudFormationAnalyzer',
+              States: {
+                CloudFormationAnalyzer: {
+                  Type: 'Task',
+                  Resource: cdk.Fn.getAtt(cloudformationAnalyzerLambda.logicalId, 'Arn').toString(),
+                  // Match Lambda timeout so Step Functions fails fast if the
+                  // task hangs. Kept in sync with the Lambda's timeout property.
+                  TimeoutSeconds: cloudformationAnalyzerLambda.timeout,
+                  Retry: [
+                    {
+                      ErrorEquals: [
+                        'Lambda.ServiceException',
+                        'Lambda.AWSLambdaException',
+                        'Lambda.SdkClientException',
+                        'Lambda.TooManyRequestsException',
+                      ],
+                      IntervalSeconds: 2,
+                      MaxAttempts: 3,
+                      BackoffRate: 2,
+                    },
+                  ],
+                  Catch: [
+                    {
+                      ErrorEquals: ['States.ALL'],
+                      Next: 'CloudFormationFailed',
+                      ResultPath: '$.error',
+                    },
+                  ],
+                  End: true,
+                },
+                CloudFormationFailed: {
+                  Type: 'Pass',
+                  Parameters: { analyzer: 'cloudformation', status: 'failed', 'error.$': '$.error' },
+                  End: true,
+                },
+              },
+            },
+          ],
         },
       },
     };
@@ -336,6 +511,9 @@ export class UsageAnalysisStack extends cdk.Stack {
     // Outputs for cross-stack references
     new cdk.CfnOutput(this, UsageAnalysisStackOutputs.CloudTrailAnalyzerLambdaName, {
       value: cloudtrailAnalyzerLambdaName,
+    });
+    new cdk.CfnOutput(this, UsageAnalysisStackOutputs.CloudFormationAnalyzerLambdaName, {
+      value: cloudformationAnalyzerLambdaName,
     });
     new cdk.CfnOutput(this, UsageAnalysisStackOutputs.AnalysisStateMachineArn, {
       value: cdk.Fn.ref(stateMachine.logicalId),

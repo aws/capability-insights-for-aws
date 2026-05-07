@@ -31,7 +31,14 @@ export const handler = async (event: {
   athenaResultsLocation?: string;
   daysToScan?: number;
   websiteBucket?: string;
+  analyzers?: string[];
 }): Promise<CloudTrailUsage> => {
+  // Skip if this analyzer wasn't requested
+  if (event.analyzers && !event.analyzers.includes('cloudtrail')) {
+    logger.info('CloudTrail analyzer not requested, skipping');
+    return {};
+  }
+
   const athena = new AthenaClient({});
   const websiteBucket = event.websiteBucket;
   const database = event.athenaDatabase || AthenaDefaults.DATABASE;
