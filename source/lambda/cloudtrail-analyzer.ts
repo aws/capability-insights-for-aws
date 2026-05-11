@@ -2,20 +2,8 @@ import { AthenaClient } from '@aws-sdk/client-athena';
 import { AthenaDefaults } from './constants/athena';
 import { queryCloudTrailUsage } from './services/athena-client';
 import { S3BucketClient } from './services/s3-client';
+import type { CloudTrailUsage } from './types/usage';
 import { logger } from './util/logger';
-
-/**
- * CloudTrail usage data keyed by account ID, then service name.
- * Produced by the CloudTrail Analyzer Lambda via Athena queries.
- */
-interface CloudTrailUsage {
-  [accountId: string]: {
-    [serviceName: string]: {
-      apis: string[];
-      regionApis: { [region: string]: string[] };
-    };
-  };
-}
 
 /**
  * Lambda handler for CloudTrail usage analysis.

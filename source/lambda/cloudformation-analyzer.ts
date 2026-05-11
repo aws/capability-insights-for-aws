@@ -2,28 +2,8 @@ import { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import { AWS_RESOURCE_TYPE_PREFIX } from './constants/cloudformation';
 import { listActiveStacks, getProcessedTemplate } from './services/cloudformation-client';
 import { S3BucketClient } from './services/s3-client';
+import type { CloudFormationUsage, CloudFormationUsageRecord } from './types/usage';
 import { logger } from './util/logger';
-
-/**
- * CloudFormation usage data as a flat list of resource records.
- *
- * Each record describes one resource type as it appears in one stack.
- * Downstream consumers can group by stack, service, resource type, or any
- * other field as needed. No key-based indexing is built in, keeping the
- * shape uniform and avoiding denormalization.
- */
-interface CloudFormationUsage {
-  accountId: string;
-  region: string;
-  records: UsageRecord[];
-}
-
-interface UsageRecord {
-  stackName: string;
-  serviceName: string;
-  resourceTypeName: string;
-  properties: Record<string, string[]>;
-}
 
 /**
  * Lambda handler for CloudFormation usage analysis.
@@ -171,8 +151,10 @@ function extractProperties(properties: Record<string, unknown>, accumulator: Rec
 }
 
 /** Flattens the per-stack accumulator into an array of records. */
-function buildRecords(aggregated: Record<string, Record<string, Record<string, Set<string>>>>): UsageRecord[] {
-  const records: UsageRecord[] = [];
+function buildRecords(
+  aggregated: Record<string, Record<string, Record<string, Set<string>>>>,
+): CloudFormationUsageRecord[] {
+  const records: CloudFormationUsageRecord[] = [];
 
   for (const [stackName, resourceTypes] of Object.entries(aggregated)) {
     for (const [fqn, propertySets] of Object.entries(resourceTypes)) {

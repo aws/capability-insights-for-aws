@@ -412,6 +412,23 @@ export class CapabilityInsightsStack extends cdk.Stack {
             ],
           },
         },
+        {
+          // Reads pre-computed used-capabilities-*.json files written by the
+          // usage decorator Lambda, as well as api-config.json for route metadata.
+          policyName: 'S3WebsiteBucketRead',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: ['s3:GetObject'],
+                Resource: cdk.Fn.sub('${BucketArn}/data/json/*', {
+                  BucketArn: cdk.Fn.getAtt(websiteBucket.logicalId, 'Arn').toString(),
+                }),
+              },
+            ],
+          },
+        },
       ],
     });
     const apiLambdaFunction = new lambda.CfnFunction(this, apiLambdaName, {

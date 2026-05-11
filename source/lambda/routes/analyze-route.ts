@@ -4,10 +4,10 @@ import { OrganizationsClient, ListAccountsCommand } from '@aws-sdk/client-organi
 import { StatusCode } from '../constants/status-codes';
 import { HttpMethod } from '../constants/http-methods';
 import { EnvironmentKey, getEnv, getOptionalEnv } from '../constants/environment';
+import { Scope } from '../constants/scope';
 import { logger } from '../util/logger';
 
 type AnalyzerType = 'cloudtrail' | 'resourceExplorer' | 'cloudformation';
-type ScopeType = 'account' | 'organization';
 
 const ExecutionStatus = {
   RUNNING: 'RUNNING',
@@ -38,7 +38,7 @@ interface AnalyzerParams {
 }
 
 interface AnalyzeRequest {
-  scope: ScopeType;
+  scope: Scope;
   accountIds?: string[];
   analyzers: AnalyzerType[];
   analyzerParams?: AnalyzerParams;
@@ -90,7 +90,8 @@ export async function handleAnalyze(event: APIGatewayProxyEvent): Promise<APIGat
     const currentAccountId = event.requestContext.accountId;
 
     // Determine accounts to analyze
-    const accounts = scope === 'organization' ? await discoverOrganizationAccounts() : accountIds || [currentAccountId];
+    const accounts =
+      scope === Scope.ORGANIZATION ? await discoverOrganizationAccounts() : accountIds || [currentAccountId];
 
     // Start Step Function execution
     const sfnClient = new SFNClient({});

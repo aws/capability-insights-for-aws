@@ -15,6 +15,7 @@ export interface UsageAnalysisStackProps extends cdk.StackProps {
 export enum UsageAnalysisStackOutputs {
   CloudTrailAnalyzerLambdaName = 'CloudTrailAnalyzerLambdaName',
   CloudFormationAnalyzerLambdaName = 'CloudFormationAnalyzerLambdaName',
+  UsageDecoratorLambdaName = 'UsageDecoratorLambdaName',
   AnalysisStateMachineArn = 'AnalysisStateMachineArn',
 }
 
@@ -378,6 +379,79 @@ export class UsageAnalysisStack extends cdk.Stack {
       memorySize: 512,
     });
 
+    // Usage Decorator Lambda
+    //
+    // Runs after the parallel analyzers. Reads the master capability catalogs
+    // (products.json, apis.json, cfn_resources.json) from the website bucket,
+    // decorates the usage data with regional availability, and writes three
+    // personalized files (used-capabilities-{scope}-{filterMode}.json) back
+    // to the same bucket for the UI to consume.
+    const usageDecoratorLambdaName = `${prefix}UsageDecorator`;
+    const usageDecoratorRole = new iam.CfnRole(this, `${usageDecoratorLambdaName}Role`, {
+      roleName: cdk.Fn.sub(`${usageDecoratorLambdaName}Role-\${AWS::Region}`),
+      assumeRolePolicyDocument: {
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Service: 'lambda.amazonaws.com' },
+            Action: 'sts:AssumeRole',
+          },
+        ],
+      },
+      managedPolicyArns: [cdk.Fn.sub('arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole')],
+      policies: [
+        {
+          policyName: 'S3ReadMasterCatalogs',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: ['s3:GetObject'],
+                Resource: cdk.Fn.sub('${BucketArn}/data/json/*', {
+                  BucketArn: websiteBucketArnParameter.valueAsString,
+                }),
+              },
+            ],
+          },
+        },
+        {
+          policyName: 'S3WriteUsedFiles',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: ['s3:PutObject'],
+                Resource: cdk.Fn.sub('${BucketArn}/data/json/used-*.json', {
+                  BucketArn: websiteBucketArnParameter.valueAsString,
+                }),
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const usageDecoratorLambda = new lambda.CfnFunction(this, usageDecoratorLambdaName, {
+      functionName: usageDecoratorLambdaName,
+      runtime: 'nodejs24.x',
+      handler: 'usage-decorator.handler',
+      role: cdk.Fn.getAtt(usageDecoratorRole.logicalId, 'Arn').toString(),
+      code: {
+        s3Bucket: deploymentAssetsBucketNameParameter.valueAsString,
+        s3Key: lambdaCodeZipPathParameter.valueAsString,
+      },
+      timeout: 120,
+      environment: {
+        variables: {
+          WEBSITE_BUCKET_NAME: websiteBucketNameParameter.valueAsString,
+        },
+      },
+      memorySize: 512,
+    });
+
     // Step Functions State Machine for Analysis
     const stateMachineRole = new iam.Role(this, `${prefix}AnalysisStateMachineRole`, {
       assumedBy: new iam.ServicePrincipal('states.amazonaws.com'),
@@ -389,6 +463,7 @@ export class UsageAnalysisStack extends cdk.Stack {
               resources: [
                 cdk.Fn.getAtt(cloudtrailAnalyzerLambda.logicalId, 'Arn').toString(),
                 cdk.Fn.getAtt(cloudformationAnalyzerLambda.logicalId, 'Arn').toString(),
+                cdk.Fn.getAtt(usageDecoratorLambda.logicalId, 'Arn').toString(),
               ],
             }),
           ],
@@ -414,12 +489,15 @@ export class UsageAnalysisStack extends cdk.Stack {
     // not included here — it's a deployment concern that should be configured
     // per environment based on the consumer's operational requirements.
     const stateMachineDefinition = {
-      Comment: 'Analysis workflow for CloudTrail, Resource Explorer, and CloudFormation',
+      Comment: 'Analysis workflow: parallel analyzers → merge usage into personalized files',
       StartAt: 'ParallelAnalyzers',
       States: {
         ParallelAnalyzers: {
           Type: 'Parallel',
-          End: true,
+          // Preserve the original input so DecorateUsage still has websiteBucket, etc.
+          // Branch outputs are collected under $.parallelResults.
+          ResultPath: '$.parallelResults',
+          Next: 'DecorateUsage',
           Branches: [
             {
               StartAt: 'CloudTrailAnalyzer',
@@ -499,6 +577,40 @@ export class UsageAnalysisStack extends cdk.Stack {
             },
           ],
         },
+        // Takes the parallel analyzer outputs plus the original input and
+        // writes personalized used-capabilities-{scope}-{filterMode}.json
+        // files to the website bucket, decorated with regional availability.
+        DecorateUsage: {
+          Type: 'Task',
+          Resource: cdk.Fn.getAtt(usageDecoratorLambda.logicalId, 'Arn').toString(),
+          TimeoutSeconds: usageDecoratorLambda.timeout,
+          Retry: [
+            {
+              ErrorEquals: [
+                'Lambda.ServiceException',
+                'Lambda.AWSLambdaException',
+                'Lambda.SdkClientException',
+                'Lambda.TooManyRequestsException',
+              ],
+              IntervalSeconds: 2,
+              MaxAttempts: 3,
+              BackoffRate: 2,
+            },
+          ],
+          Catch: [
+            {
+              ErrorEquals: ['States.ALL'],
+              Next: 'DecorateUsageFailed',
+              ResultPath: '$.decorateError',
+            },
+          ],
+          End: true,
+        },
+        DecorateUsageFailed: {
+          Type: 'Pass',
+          Parameters: { step: 'decorate', status: 'failed', 'error.$': '$.decorateError' },
+          End: true,
+        },
       },
     };
 
@@ -514,6 +626,9 @@ export class UsageAnalysisStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, UsageAnalysisStackOutputs.CloudFormationAnalyzerLambdaName, {
       value: cloudformationAnalyzerLambdaName,
+    });
+    new cdk.CfnOutput(this, UsageAnalysisStackOutputs.UsageDecoratorLambdaName, {
+      value: usageDecoratorLambdaName,
     });
     new cdk.CfnOutput(this, UsageAnalysisStackOutputs.AnalysisStateMachineArn, {
       value: cdk.Fn.ref(stateMachine.logicalId),
