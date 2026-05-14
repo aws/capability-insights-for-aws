@@ -6,8 +6,11 @@
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist",
-    "package": "cd dist && zip -r ../../../deployment/dist/lambda/lambdaAssets.zip .",
+    "package": "rm -rf dist/node_modules && mkdir -p dist/node_modules && cp -R \"$(node -p 'path.dirname(require.resolve(\"js-yaml/package.json\"))')\" dist/node_modules/js-yaml && cp -R \"$(node -p 'path.dirname(require.resolve(\"argparse/package.json\"))')\" dist/node_modules/argparse && cd dist && rm -f ../../../deployment/dist/lambda/lambdaAssets.zip && zip -r ../../../deployment/dist/lambda/lambdaAssets.zip . -x 'node_modules/@*'",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "js-yaml": "4.1.1"
   },
   "devDependencies": {
     "@aws-sdk/client-athena": "3.1040.0",
@@ -17,6 +20,7 @@
     "@aws-sdk/client-s3": "3.1020.0",
     "@aws-sdk/client-sfn": "3.1040.0",
     "@types/aws-lambda": "^8.10.160",
+    "@types/js-yaml": "^4.0.9",
     "aws-sdk-client-mock": "^4.0.0",
     "vitest": "^3.2.3"
   }

@@ -1,0 +1,927 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CloudFormation template matches snapshot 1`] = `
+{
+  "Conditions": {
+    "CapabilityInsightsHasCloudTrailBucket": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "CloudTrailBucketName",
+            },
+            "",
+          ],
+        },
+      ],
+    },
+  },
+  "Outputs": {
+    "AnalysisStateMachineArn": {
+      "Value": {
+        "Ref": "CapabilityInsightsAnalysisStateMachine",
+      },
+    },
+    "CloudFormationAnalyzerLambdaName": {
+      "Value": "CapabilityInsightsCloudFormationAnalyzer",
+    },
+    "CloudTrailAnalyzerLambdaName": {
+      "Value": "CapabilityInsightsCloudTrailAnalyzer",
+    },
+    "UsageDecoratorLambdaName": {
+      "Value": "CapabilityInsightsUsageDecorator",
+    },
+  },
+  "Parameters": {
+    "AnalysisSchedule": {
+      "AllowedPattern": "^(rate|cron)\\(.+\\)$",
+      "ConstraintDescription": "Must be a valid EventBridge schedule expression like rate(1 day) or cron(0 6 * * ? *).",
+      "Default": "rate(1 day)",
+      "Description": "EventBridge schedule expression for automated analysis runs (e.g. "rate(1 day)", "cron(0 6 * * ? *)").",
+      "Type": "String",
+    },
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+    "CloudTrailBucketName": {
+      "Default": "test-trail-bucket",
+      "Description": "Name of the S3 bucket containing CloudTrail logs for usage analysis.",
+      "Type": "String",
+    },
+    "DaysToScan": {
+      "Default": 30,
+      "Description": "CloudTrail lookback window (days) for scheduled analyzer runs.",
+      "MaxValue": 90,
+      "MinValue": 1,
+      "Type": "Number",
+    },
+    "DeploymentAssetsBucketName": {
+      "Default": "test-deployment-bucket",
+      "Description": "Name of S3 bucket where deployment assets (Lambda code zip) are located.",
+      "Type": "String",
+    },
+    "LambdaCodeZipPath": {
+      "Default": "lambdaAssets.zip",
+      "Description": "Path in the deployment assets bucket where the Lambda code zip is located.",
+      "Type": "String",
+    },
+    "WebsiteBucketArn": {
+      "Default": "arn:aws:s3:::test-website-bucket",
+      "Description": "ARN of the Capability Insights website S3 bucket.",
+      "Type": "String",
+    },
+    "WebsiteBucketName": {
+      "Default": "test-website-bucket",
+      "Description": "Name of the Capability Insights website S3 bucket (for storing analysis results).",
+      "Type": "String",
+    },
+  },
+  "Resources": {
+    "CapabilityInsightsAnalysisScheduleRole": {
+      "Condition": "CapabilityInsightsHasCloudTrailBucket",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "ArnLike": {
+                  "aws:SourceArn": {
+                    "Fn::Sub": "arn:\${AWS::Partition}:events:\${AWS::Region}:\${AWS::AccountId}:rule/*",
+                  },
+                },
+                "StringEquals": {
+                  "aws:SourceAccount": {
+                    "Ref": "AWS::AccountId",
+                  },
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "states:StartExecution",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Ref": "CapabilityInsightsAnalysisStateMachine",
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "InvokeStateMachine",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CapabilityInsightsAnalysisScheduleRule": {
+      "Condition": "CapabilityInsightsHasCloudTrailBucket",
+      "Properties": {
+        "Description": "Daily trigger for CapabilityInsightsAnalysisStateMachine.",
+        "ScheduleExpression": {
+          "Ref": "AnalysisSchedule",
+        },
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "CapabilityInsightsAnalysisStateMachine",
+            },
+            "Id": "AnalysisStateMachineTarget",
+            "Input": {
+              "Fn::Sub": [
+                "{"scope":"account","accounts":["\${AccountId}"],"analyzers":["cloudtrail","cloudformation"],"cloudTrailBucket":"\${CloudTrailBucket}","cloudTrailPrefix":"AWSLogs/","daysToScan":\${DaysToScan},"websiteBucket":"\${WebsiteBucket}","cloudtrailAnalyzerLambda":"\${CloudTrailAnalyzerLambda}","cloudformationAnalyzerLambda":"\${CloudFormationAnalyzerLambda}","resourceExplorerAnalyzerLambda":""}",
+                {
+                  "AccountId": {
+                    "Ref": "AWS::AccountId",
+                  },
+                  "CloudFormationAnalyzerLambda": "CapabilityInsightsCloudFormationAnalyzer",
+                  "CloudTrailAnalyzerLambda": "CapabilityInsightsCloudTrailAnalyzer",
+                  "CloudTrailBucket": {
+                    "Ref": "CloudTrailBucketName",
+                  },
+                  "DaysToScan": {
+                    "Ref": "DaysToScan",
+                  },
+                  "WebsiteBucket": {
+                    "Ref": "WebsiteBucketName",
+                  },
+                },
+              ],
+            },
+            "RoleArn": {
+              "Fn::GetAtt": [
+                "CapabilityInsightsAnalysisScheduleRole",
+                "Arn",
+              ],
+            },
+          },
+        ],
+      },
+      "Type": "AWS::Events::Rule",
+    },
+    "CapabilityInsightsAnalysisStateMachine": {
+      "Properties": {
+        "DefinitionString": {
+          "Fn::Join": [
+            "",
+            [
+              "{"Comment":"Analysis workflow: parallel analyzers → merge usage into personalized files","StartAt":"ParallelAnalyzers","States":{"ParallelAnalyzers":{"Type":"Parallel","ResultPath":"$.parallelResults","Next":"DecorateUsage","Branches":[{"StartAt":"CloudTrailAnalyzer","States":{"CloudTrailAnalyzer":{"Type":"Task","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CapabilityInsightsCloudTrailAnalyzer",
+                  "Arn",
+                ],
+              },
+              "","TimeoutSeconds":300,"Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException","Lambda.TooManyRequestsException"],"IntervalSeconds":2,"MaxAttempts":3,"BackoffRate":2}],"Catch":[{"ErrorEquals":["States.ALL"],"Next":"CloudTrailFailed","ResultPath":"$.error"}],"End":true},"CloudTrailFailed":{"Type":"Pass","Parameters":{"analyzer":"cloudtrail","status":"failed","error.$":"$.error"},"End":true}}},{"StartAt":"CloudFormationAnalyzer","States":{"CloudFormationAnalyzer":{"Type":"Task","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CapabilityInsightsCloudFormationAnalyzer",
+                  "Arn",
+                ],
+              },
+              "","TimeoutSeconds":300,"Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException","Lambda.TooManyRequestsException"],"IntervalSeconds":2,"MaxAttempts":3,"BackoffRate":2}],"Catch":[{"ErrorEquals":["States.ALL"],"Next":"CloudFormationFailed","ResultPath":"$.error"}],"End":true},"CloudFormationFailed":{"Type":"Pass","Parameters":{"analyzer":"cloudformation","status":"failed","error.$":"$.error"},"End":true}}}]},"DecorateUsage":{"Type":"Task","Resource":"",
+              {
+                "Fn::GetAtt": [
+                  "CapabilityInsightsUsageDecorator",
+                  "Arn",
+                ],
+              },
+              "","TimeoutSeconds":120,"Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException","Lambda.TooManyRequestsException"],"IntervalSeconds":2,"MaxAttempts":3,"BackoffRate":2}],"Catch":[{"ErrorEquals":["States.ALL"],"Next":"DecorateUsageFailed","ResultPath":"$.decorateError"}],"End":true},"DecorateUsageFailed":{"Type":"Pass","Parameters":{"step":"decorate","status":"failed","error.$":"$.decorateError"},"End":true}}}",
+            ],
+          ],
+        },
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsAnalysisStateMachineRole297A7C39",
+            "Arn",
+          ],
+        },
+        "StateMachineName": "CapabilityInsightsAnalysisStateMachine",
+      },
+      "Type": "AWS::StepFunctions::StateMachine",
+    },
+    "CapabilityInsightsAnalysisStateMachineRole297A7C39": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "lambda:InvokeFunction",
+                  "Effect": "Allow",
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "CapabilityInsightsCloudTrailAnalyzer",
+                        "Arn",
+                      ],
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "CapabilityInsightsCloudFormationAnalyzer",
+                        "Arn",
+                      ],
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "CapabilityInsightsUsageDecorator",
+                        "Arn",
+                      ],
+                    },
+                  ],
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "InvokeLambda",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CapabilityInsightsCloudFormationAnalyzer": {
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "DeploymentAssetsBucketName",
+          },
+          "S3Key": {
+            "Ref": "LambdaCodeZipPath",
+          },
+        },
+        "Environment": {
+          "Variables": {
+            "WEBSITE_BUCKET_NAME": {
+              "Ref": "WebsiteBucketName",
+            },
+          },
+        },
+        "FunctionName": "CapabilityInsightsCloudFormationAnalyzer",
+        "Handler": "cloudformation-analyzer.handler",
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsCloudFormationAnalyzerRole",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 300,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CapabilityInsightsCloudFormationAnalyzerRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          },
+        ],
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "cloudformation:ListStacks",
+                    "cloudformation:GetTemplate",
+                    "cloudformation:DescribeStacks",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": "*",
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "CloudFormationRead",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "s3:PutObject",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    {
+                      "Fn::Sub": [
+                        "\${BucketArn}/usage/*",
+                        {
+                          "BucketArn": {
+                            "Ref": "WebsiteBucketArn",
+                          },
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "S3WriteAccess",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsCloudFormationAnalyzerRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CapabilityInsightsCloudTrailAnalyzer": {
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "DeploymentAssetsBucketName",
+          },
+          "S3Key": {
+            "Ref": "LambdaCodeZipPath",
+          },
+        },
+        "Environment": {
+          "Variables": {
+            "WEBSITE_BUCKET_NAME": {
+              "Ref": "WebsiteBucketName",
+            },
+          },
+        },
+        "FunctionName": "CapabilityInsightsCloudTrailAnalyzer",
+        "Handler": "cloudtrail-analyzer.handler",
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsCloudTrailAnalyzerRole",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 300,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CapabilityInsightsCloudTrailAnalyzerRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          },
+        ],
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "athena:StartQueryExecution",
+                    "athena:GetQueryExecution",
+                    "athena:GetQueryResults",
+                    "athena:StopQueryExecution",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": "arn:\${AWS::Partition}:athena:\${AWS::Region}:\${AWS::AccountId}:workgroup/primary",
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "AthenaAccess",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "glue:GetDatabase",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:\${AWS::Partition}:glue:\${AWS::Region}:\${AWS::AccountId}:catalog",
+                    },
+                    {
+                      "Fn::Sub": "arn:\${AWS::Partition}:glue:\${AWS::Region}:\${AWS::AccountId}:database/cloudtrail_analysis",
+                    },
+                  ],
+                },
+                {
+                  "Action": [
+                    "glue:GetTable",
+                    "glue:GetTables",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:\${AWS::Partition}:glue:\${AWS::Region}:\${AWS::AccountId}:catalog",
+                    },
+                    {
+                      "Fn::Sub": "arn:\${AWS::Partition}:glue:\${AWS::Region}:\${AWS::AccountId}:database/cloudtrail_analysis",
+                    },
+                    {
+                      "Fn::Sub": "arn:\${AWS::Partition}:glue:\${AWS::Region}:\${AWS::AccountId}:table/cloudtrail_analysis/*",
+                    },
+                  ],
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "GlueCatalogAccess",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:ListBucket",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    {
+                      "Fn::Sub": [
+                        "arn:\${AWS::Partition}:s3:::\${BucketName}",
+                        {
+                          "BucketName": {
+                            "Ref": "CloudTrailBucketName",
+                          },
+                        },
+                      ],
+                    },
+                    {
+                      "Fn::Sub": [
+                        "arn:\${AWS::Partition}:s3:::\${BucketName}/*",
+                        {
+                          "BucketName": {
+                            "Ref": "CloudTrailBucketName",
+                          },
+                        },
+                      ],
+                    },
+                  ],
+                  "Sid": "ReadCloudTrailLogs",
+                },
+                {
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:ListBucket",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    {
+                      "Ref": "WebsiteBucketArn",
+                    },
+                    {
+                      "Fn::Sub": [
+                        "\${BucketArn}/athena-results/*",
+                        {
+                          "BucketArn": {
+                            "Ref": "WebsiteBucketArn",
+                          },
+                        },
+                      ],
+                    },
+                  ],
+                  "Sid": "ReadAthenaResults",
+                },
+                {
+                  "Action": [
+                    "s3:GetBucketLocation",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Ref": "WebsiteBucketArn",
+                  },
+                  "Sid": "GetWebsiteBucketLocation",
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "S3ReadAccess",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "s3:PutObject",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    {
+                      "Fn::Sub": [
+                        "\${BucketArn}/athena-results/*",
+                        {
+                          "BucketArn": {
+                            "Ref": "WebsiteBucketArn",
+                          },
+                        },
+                      ],
+                    },
+                    {
+                      "Fn::Sub": [
+                        "\${BucketArn}/usage/*",
+                        {
+                          "BucketArn": {
+                            "Ref": "WebsiteBucketArn",
+                          },
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "S3WriteAccess",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsCloudTrailAnalyzerRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CapabilityInsightsCloudTrailDatabase": {
+      "Properties": {
+        "CatalogId": {
+          "Ref": "AWS::AccountId",
+        },
+        "DatabaseInput": {
+          "Description": "Database for CloudTrail usage analysis queries",
+          "Name": "cloudtrail_analysis",
+        },
+      },
+      "Type": "AWS::Glue::Database",
+    },
+    "CapabilityInsightsCloudTrailTable": {
+      "DependsOn": [
+        "CapabilityInsightsCloudTrailDatabase",
+      ],
+      "Properties": {
+        "CatalogId": {
+          "Ref": "AWS::AccountId",
+        },
+        "DatabaseName": "cloudtrail_analysis",
+        "TableInput": {
+          "Description": "CloudTrail logs table with partition projection",
+          "Name": "cloudtrail_logs",
+          "Parameters": {
+            "projection.enabled": "false",
+          },
+          "PartitionKeys": [],
+          "StorageDescriptor": {
+            "Columns": [
+              {
+                "Name": "eventversion",
+                "Type": "string",
+              },
+              {
+                "Name": "useridentity",
+                "Type": "struct<type:string,principalid:string,arn:string,accountid:string,invokedby:string,accesskeyid:string,username:string,sessioncontext:struct<attributes:struct<mfaauthenticated:string,creationdate:string>,sessionissuer:struct<type:string,principalid:string,arn:string,accountid:string,username:string>>>",
+              },
+              {
+                "Name": "eventtime",
+                "Type": "string",
+              },
+              {
+                "Name": "eventsource",
+                "Type": "string",
+              },
+              {
+                "Name": "eventname",
+                "Type": "string",
+              },
+              {
+                "Name": "awsregion",
+                "Type": "string",
+              },
+              {
+                "Name": "sourceipaddress",
+                "Type": "string",
+              },
+              {
+                "Name": "useragent",
+                "Type": "string",
+              },
+              {
+                "Name": "errorcode",
+                "Type": "string",
+              },
+              {
+                "Name": "errormessage",
+                "Type": "string",
+              },
+              {
+                "Name": "requestparameters",
+                "Type": "string",
+              },
+              {
+                "Name": "responseelements",
+                "Type": "string",
+              },
+              {
+                "Name": "additionaleventdata",
+                "Type": "string",
+              },
+              {
+                "Name": "requestid",
+                "Type": "string",
+              },
+              {
+                "Name": "eventid",
+                "Type": "string",
+              },
+              {
+                "Name": "resources",
+                "Type": "array<struct<arn:string,accountid:string,type:string>>",
+              },
+              {
+                "Name": "eventtype",
+                "Type": "string",
+              },
+              {
+                "Name": "apiversion",
+                "Type": "string",
+              },
+              {
+                "Name": "readonly",
+                "Type": "string",
+              },
+              {
+                "Name": "recipientaccountid",
+                "Type": "string",
+              },
+              {
+                "Name": "serviceeventdetails",
+                "Type": "string",
+              },
+              {
+                "Name": "sharedeventid",
+                "Type": "string",
+              },
+              {
+                "Name": "vpcendpointid",
+                "Type": "string",
+              },
+            ],
+            "InputFormat": "com.amazon.emr.cloudtrail.CloudTrailInputFormat",
+            "Location": {
+              "Fn::Sub": [
+                "s3://\${BucketName}/AWSLogs/\${AWS::AccountId}/CloudTrail/",
+                {
+                  "BucketName": {
+                    "Ref": "CloudTrailBucketName",
+                  },
+                },
+              ],
+            },
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+            "SerdeInfo": {
+              "SerializationLibrary": "com.amazon.emr.hive.serde.CloudTrailSerde",
+            },
+          },
+          "TableType": "EXTERNAL_TABLE",
+        },
+      },
+      "Type": "AWS::Glue::Table",
+    },
+    "CapabilityInsightsLakeFormationDbPermission": {
+      "DependsOn": [
+        "CapabilityInsightsCloudTrailAnalyzerRole",
+        "CapabilityInsightsCloudTrailDatabase",
+      ],
+      "Properties": {
+        "DataLakePrincipal": {
+          "DataLakePrincipalIdentifier": {
+            "Fn::GetAtt": [
+              "CapabilityInsightsCloudTrailAnalyzerRole",
+              "Arn",
+            ],
+          },
+        },
+        "Permissions": [
+          "DESCRIBE",
+        ],
+        "Resource": {
+          "DatabaseResource": {
+            "Name": "cloudtrail_analysis",
+          },
+        },
+      },
+      "Type": "AWS::LakeFormation::Permissions",
+    },
+    "CapabilityInsightsLakeFormationTablePermission": {
+      "DependsOn": [
+        "CapabilityInsightsCloudTrailAnalyzerRole",
+        "CapabilityInsightsCloudTrailTable",
+      ],
+      "Properties": {
+        "DataLakePrincipal": {
+          "DataLakePrincipalIdentifier": {
+            "Fn::GetAtt": [
+              "CapabilityInsightsCloudTrailAnalyzerRole",
+              "Arn",
+            ],
+          },
+        },
+        "Permissions": [
+          "DESCRIBE",
+          "SELECT",
+        ],
+        "Resource": {
+          "TableResource": {
+            "DatabaseName": "cloudtrail_analysis",
+            "TableWildcard": {},
+          },
+        },
+      },
+      "Type": "AWS::LakeFormation::Permissions",
+    },
+    "CapabilityInsightsUsageDecorator": {
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "DeploymentAssetsBucketName",
+          },
+          "S3Key": {
+            "Ref": "LambdaCodeZipPath",
+          },
+        },
+        "Environment": {
+          "Variables": {
+            "INCLUDE_ALL_FEATURES_PER_SERVICE": "true",
+            "WEBSITE_BUCKET_NAME": {
+              "Ref": "WebsiteBucketName",
+            },
+          },
+        },
+        "FunctionName": "CapabilityInsightsUsageDecorator",
+        "Handler": "usage-decorator.handler",
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsUsageDecoratorRole",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 120,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CapabilityInsightsUsageDecoratorRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          },
+        ],
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "s3:GetObject",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "\${BucketArn}/data/json/*",
+                      {
+                        "BucketArn": {
+                          "Ref": "WebsiteBucketArn",
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "S3ReadMasterCatalogs",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "s3:PutObject",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "\${BucketArn}/data/json/used-*.json",
+                      {
+                        "BucketArn": {
+                          "Ref": "WebsiteBucketArn",
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "S3WriteUsedFiles",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsUsageDecoratorRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;

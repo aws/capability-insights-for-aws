@@ -138,6 +138,7 @@ describe('usage-decorator', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   describe('input validation', () => {
@@ -310,6 +311,159 @@ describe('usage-decorator', () => {
       expect(instanceTypeProp?.resourceConfigurations.map(c => c.resourceConfigurationName)).toEqual(['t3.medium']);
     });
 
+    it('attributes configuration values to the stacks that contributed them', async () => {
+      const richCfnResources = [
+        {
+          serviceName: 'EC2',
+          resourceTypes: [
+            {
+              resourceTypeName: 'Instance',
+              regionalAvailability: { 'us-east-1': 'Available' },
+              resourceProperties: [
+                {
+                  resourcePropertyName: 'InstanceType',
+                  resourceConfigurations: [
+                    { resourceConfigurationName: 't3.medium', regionalAvailability: {} },
+                    { resourceConfigurationName: 't3.micro', regionalAvailability: {} },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ];
+
+      s3Mock.reset();
+      s3Mock
+        .on(GetObjectCommand, { Key: 'data/json/products.json' })
+        .resolves({ Body: asStreamingBody(sampleProducts) as never })
+        .on(GetObjectCommand, { Key: 'data/json/apis.json' })
+        .resolves({ Body: asStreamingBody(sampleApis) as never })
+        .on(GetObjectCommand, { Key: 'data/json/cfn_resources.json' })
+        .resolves({ Body: asStreamingBody(richCfnResources) as never })
+        .on(PutObjectCommand)
+        .resolves({});
+
+      const cloudFormationUsage = {
+        accountId: '123456789012',
+        region: 'us-east-1',
+        records: [
+          {
+            stackName: 'AppStack',
+            serviceName: 'EC2',
+            resourceTypeName: 'Instance',
+            properties: { InstanceType: ['t3.medium'] },
+          },
+          {
+            stackName: 'SampleStack',
+            serviceName: 'EC2',
+            resourceTypeName: 'Instance',
+            properties: { InstanceType: ['t3.micro'] },
+          },
+        ],
+      };
+      await handler({ websiteBucket: 'test-bucket', parallelResults: [{}, cloudFormationUsage] });
+
+      const body = capturedPut('data/json/used-capabilities-account-deployed.json');
+      const ec2 = body.cfnResources.find(r => r.serviceName === 'EC2');
+      const instance = ec2?.resourceTypes.find(rt => rt.resourceTypeName === 'Instance') as {
+        resourceProperties?: Array<{
+          resourceConfigurations: Array<{ resourceConfigurationName: string; stacks?: string[] }>;
+        }>;
+      };
+      const configs = instance?.resourceProperties?.[0].resourceConfigurations ?? [];
+      const t3Medium = configs.find(c => c.resourceConfigurationName === 't3.medium');
+      const t3Micro = configs.find(c => c.resourceConfigurationName === 't3.micro');
+      expect(t3Medium?.stacks).toEqual(['AppStack']);
+      expect(t3Micro?.stacks).toEqual(['SampleStack']);
+    });
+
+    it('keeps the resource-type-level usage.stacks consistent with per-configuration stacks', async () => {
+      // Layer 1 (resource-type usage.stacks) must equal the union of Layer 2 (per-config stacks[]).
+      // They share the same source map; drift would indicate a decorator bug.
+      const richCfnResources = [
+        {
+          serviceName: 'EC2',
+          resourceTypes: [
+            {
+              resourceTypeName: 'Instance',
+              regionalAvailability: { 'us-east-1': 'Available' },
+              resourceProperties: [
+                {
+                  resourcePropertyName: 'InstanceType',
+                  resourceConfigurations: [
+                    { resourceConfigurationName: 't3.medium', regionalAvailability: {} },
+                    { resourceConfigurationName: 't3.micro', regionalAvailability: {} },
+                    { resourceConfigurationName: 'm5.large', regionalAvailability: {} },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ];
+
+      s3Mock.reset();
+      s3Mock
+        .on(GetObjectCommand, { Key: 'data/json/products.json' })
+        .resolves({ Body: asStreamingBody(sampleProducts) as never })
+        .on(GetObjectCommand, { Key: 'data/json/apis.json' })
+        .resolves({ Body: asStreamingBody(sampleApis) as never })
+        .on(GetObjectCommand, { Key: 'data/json/cfn_resources.json' })
+        .resolves({ Body: asStreamingBody(richCfnResources) as never })
+        .on(PutObjectCommand)
+        .resolves({});
+
+      // Three stacks, partial overlap. Stack-A: t3.medium + t3.micro. Stack-B: t3.medium. Stack-C: m5.large.
+      const cloudFormationUsage = {
+        accountId: '123456789012',
+        region: 'us-east-1',
+        records: [
+          {
+            stackName: 'Stack-A',
+            serviceName: 'EC2',
+            resourceTypeName: 'Instance',
+            properties: { InstanceType: ['t3.medium', 't3.micro'] },
+          },
+          {
+            stackName: 'Stack-B',
+            serviceName: 'EC2',
+            resourceTypeName: 'Instance',
+            properties: { InstanceType: ['t3.medium'] },
+          },
+          {
+            stackName: 'Stack-C',
+            serviceName: 'EC2',
+            resourceTypeName: 'Instance',
+            properties: { InstanceType: ['m5.large'] },
+          },
+        ],
+      };
+      await handler({ websiteBucket: 'test-bucket', parallelResults: [{}, cloudFormationUsage] });
+
+      const body = capturedPut('data/json/used-capabilities-account-deployed.json');
+      const ec2 = body.cfnResources.find(r => r.serviceName === 'EC2');
+      const instance = ec2?.resourceTypes.find(rt => rt.resourceTypeName === 'Instance') as {
+        usage?: { stacks: string[]; count: number };
+        resourceProperties?: Array<{
+          resourceConfigurations: Array<{ resourceConfigurationName: string; stacks?: string[] }>;
+        }>;
+      };
+
+      const layer1Stacks = new Set(instance?.usage?.stacks ?? []);
+      expect(layer1Stacks).toEqual(new Set(['Stack-A', 'Stack-B', 'Stack-C']));
+      expect(instance?.usage?.count).toBe(3);
+
+      const configs = instance?.resourceProperties?.[0].resourceConfigurations ?? [];
+      const byName = Object.fromEntries(configs.map(c => [c.resourceConfigurationName, c.stacks ?? []]));
+      expect(new Set(byName['t3.medium'])).toEqual(new Set(['Stack-A', 'Stack-B']));
+      expect(new Set(byName['t3.micro'])).toEqual(new Set(['Stack-A']));
+      expect(new Set(byName['m5.large'])).toEqual(new Set(['Stack-C']));
+
+      const layer2Union = new Set(configs.flatMap(c => c.stacks ?? []));
+      expect(layer2Union).toEqual(layer1Stacks);
+    });
+
     it('drops resource types and services with no CFN usage', async () => {
       const cloudFormationUsage = {
         accountId: '123456789012',
@@ -452,7 +606,7 @@ describe('usage-decorator', () => {
   });
 
   describe('child products', () => {
-    it('filters child products by productId in matched products', async () => {
+    it('includes all child products for matched services by default (include-all-features on)', async () => {
       const cloudTrailUsage = {
         '123456789012': {
           'lambda.amazonaws.com': { apis: ['Invoke'], regionApis: { 'us-east-1': ['Invoke'] } },
@@ -462,8 +616,51 @@ describe('usage-decorator', () => {
 
       const body = capturedPut('data/json/used-capabilities-account-active_usage.json');
       const lambda = body.products.find(p => p.productId === 'lambda-pid');
-      // Lambda parent matched, but Lambda Layer (child) wasn't seen in usage — should be dropped
+      // Default keeps all features even when only the parent was observed.
+      expect(lambda?.childProducts).toEqual([expect.objectContaining({ productId: 'lambda-pid-layer' })]);
+    });
+
+    it('narrows child products to observed features when INCLUDE_ALL_FEATURES_PER_SERVICE is "false"', async () => {
+      vi.stubEnv('INCLUDE_ALL_FEATURES_PER_SERVICE', 'false');
+      const cloudTrailUsage = {
+        '123456789012': {
+          'lambda.amazonaws.com': { apis: ['Invoke'], regionApis: { 'us-east-1': ['Invoke'] } },
+        },
+      };
+      await handler({ websiteBucket: 'test-bucket', parallelResults: [cloudTrailUsage, null] });
+
+      const body = capturedPut('data/json/used-capabilities-account-active_usage.json');
+      const lambda = body.products.find(p => p.productId === 'lambda-pid');
+      // With the flag off, Lambda Layer is dropped because it wasn't in usage.
       expect(lambda?.childProducts).toEqual([]);
+    });
+
+    it('treats INCLUDE_ALL_FEATURES_PER_SERVICE case-insensitively ("FALSE" disables it)', async () => {
+      vi.stubEnv('INCLUDE_ALL_FEATURES_PER_SERVICE', 'FALSE');
+      const cloudTrailUsage = {
+        '123456789012': {
+          'lambda.amazonaws.com': { apis: ['Invoke'], regionApis: { 'us-east-1': ['Invoke'] } },
+        },
+      };
+      await handler({ websiteBucket: 'test-bucket', parallelResults: [cloudTrailUsage, null] });
+
+      const body = capturedPut('data/json/used-capabilities-account-active_usage.json');
+      const lambda = body.products.find(p => p.productId === 'lambda-pid');
+      expect(lambda?.childProducts).toEqual([]);
+    });
+
+    it('treats any non-"false" value as enabled (e.g., "no", "0", "truthy")', async () => {
+      vi.stubEnv('INCLUDE_ALL_FEATURES_PER_SERVICE', 'no');
+      const cloudTrailUsage = {
+        '123456789012': {
+          'lambda.amazonaws.com': { apis: ['Invoke'], regionApis: { 'us-east-1': ['Invoke'] } },
+        },
+      };
+      await handler({ websiteBucket: 'test-bucket', parallelResults: [cloudTrailUsage, null] });
+
+      const body = capturedPut('data/json/used-capabilities-account-active_usage.json');
+      const lambda = body.products.find(p => p.productId === 'lambda-pid');
+      expect(lambda?.childProducts).toEqual([expect.objectContaining({ productId: 'lambda-pid-layer' })]);
     });
   });
 

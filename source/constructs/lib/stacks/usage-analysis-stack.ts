@@ -1,4 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
+import * as events from 'aws-cdk-lib/aws-events';
 import * as glue from 'aws-cdk-lib/aws-glue';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -10,6 +11,22 @@ export interface UsageAnalysisStackProps extends cdk.StackProps {
   deploymentAssetsBucketName?: string;
   lambdaCodeZipPath?: string;
   cloudTrailBucketName?: string;
+  /**
+   * EventBridge schedule expression for automated analysis runs. Accepts the
+   * AWS Schedule Expression syntax: `rate(...)` for fixed intervals (`rate(1 day)`,
+   * `rate(12 hours)`) or `cron(...)` for time-of-day scheduling
+   * (`cron(0 6 * * ? *)` = daily at 06:00 UTC).
+   *
+   * Default is `rate(1 day)`. To change without redeploying CDK, set the
+   * AnalysisSchedule CloudFormation parameter at deploy time.
+   */
+  analysisSchedule?: string;
+  /**
+   * CloudTrail lookback window (days) for scheduled analyzer runs. Default
+   * is 30. Bigger windows catch less-frequent APIs but cost more in Athena
+   * scans; smaller windows are cheaper but miss occasional usage.
+   */
+  daysToScan?: number;
 }
 
 export enum UsageAnalysisStackOutputs {
@@ -62,6 +79,24 @@ export class UsageAnalysisStack extends cdk.Stack {
       type: 'String',
       description: 'Name of the S3 bucket containing CloudTrail logs for usage analysis.',
       default: props?.cloudTrailBucketName ?? '',
+    });
+
+    const analysisScheduleParameter = new cdk.CfnParameter(this, 'AnalysisSchedule', {
+      type: 'String',
+      description:
+        'EventBridge schedule expression for automated analysis runs (e.g. "rate(1 day)", "cron(0 6 * * ? *)").',
+      default: props?.analysisSchedule ?? 'rate(1 day)',
+      // Reject empty / clearly-malformed values at deploy time.
+      allowedPattern: '^(rate|cron)\\(.+\\)$',
+      constraintDescription: 'Must be a valid EventBridge schedule expression like rate(1 day) or cron(0 6 * * ? *).',
+    });
+
+    const daysToScanParameter = new cdk.CfnParameter(this, 'DaysToScan', {
+      type: 'Number',
+      description: 'CloudTrail lookback window (days) for scheduled analyzer runs.',
+      default: props?.daysToScan ?? 30,
+      minValue: 1,
+      maxValue: 90,
     });
 
     // Glue Database and Table for CloudTrail analysis (pre-provisioned at deploy time)
@@ -447,6 +482,10 @@ export class UsageAnalysisStack extends cdk.Stack {
       environment: {
         variables: {
           WEBSITE_BUCKET_NAME: websiteBucketNameParameter.valueAsString,
+          // Keep all features under each kept service in the personalized view.
+          // Set to "false" via stack override to narrow features to only those
+          // directly observed in usage data.
+          INCLUDE_ALL_FEATURES_PER_SERVICE: 'true',
         },
       },
       memorySize: 512,
@@ -619,6 +658,104 @@ export class UsageAnalysisStack extends cdk.Stack {
       roleArn: stateMachineRole.roleArn,
       definitionString: JSON.stringify(stateMachineDefinition),
     });
+
+    // Scheduled rule to trigger the analysis state machine daily.
+    //
+    // Ensures account owners get refreshed personalized data without needing
+    // to call POST /analysis manually. Mirrors the existing DataFetch schedule
+    // pattern in the insights stack. Only wires a rule when a CloudTrail bucket
+    // is configured, since cloudtrail is a required analyzer; if the bucket is
+    // absent, scheduled runs would just fail at the analyzer step.
+    const hasCloudTrailBucket = new cdk.CfnCondition(this, `${prefix}HasCloudTrailBucket`, {
+      expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(cloudTrailBucketNameParameter.valueAsString, '')),
+    });
+
+    // Dedicated role so the rule can call states:StartExecution.
+    //
+    // Trust is scoped to EventBridge in *this* account only (SourceAccount),
+    // and to a rule under this stack's events namespace (SourceArn). The
+    // wildcard on the rule name avoids a circular CFN reference between the
+    // role and rule; it's tight enough because (a) SourceAccount restricts
+    // the assumer to our own account and (b) the role's policy below only
+    // permits starting *this* state machine.
+    const analysisScheduleRole = new iam.CfnRole(this, `${prefix}AnalysisScheduleRole`, {
+      assumeRolePolicyDocument: {
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Service: 'events.amazonaws.com' },
+            Action: 'sts:AssumeRole',
+            Condition: {
+              StringEquals: { 'aws:SourceAccount': cdk.Aws.ACCOUNT_ID },
+              ArnLike: {
+                'aws:SourceArn': cdk.Fn.sub('arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/*'),
+              },
+            },
+          },
+        ],
+      },
+      policies: [
+        {
+          policyName: 'InvokeStateMachine',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: ['states:StartExecution'],
+                Resource: cdk.Fn.ref(stateMachine.logicalId),
+              },
+            ],
+          },
+        },
+      ],
+    });
+    analysisScheduleRole.cfnOptions.condition = hasCloudTrailBucket;
+
+    // Mirrors the POST /analysis input shape.
+    const baseInput = JSON.stringify({
+      scope: 'account',
+      accounts: ['__ACCOUNTS__'],
+      analyzers: ['cloudtrail', 'cloudformation'],
+      cloudTrailBucket: '__BUCKET__',
+      cloudTrailPrefix: 'AWSLogs/',
+      daysToScan: '__DAYS__',
+      websiteBucket: '__WEBSITE__',
+      cloudtrailAnalyzerLambda: '__CT_LAMBDA__',
+      cloudformationAnalyzerLambda: '__CF_LAMBDA__',
+      resourceExplorerAnalyzerLambda: '',
+    });
+    const scheduledAnalysisInputTemplate = baseInput
+      .replace('"__ACCOUNTS__"', '"${AccountId}"')
+      .replace('"__BUCKET__"', '"${CloudTrailBucket}"')
+      // Unquoted on both sides so the substituted value is a JSON number.
+      .replace('"__DAYS__"', '${DaysToScan}')
+      .replace('"__WEBSITE__"', '"${WebsiteBucket}"')
+      .replace('"__CT_LAMBDA__"', '"${CloudTrailAnalyzerLambda}"')
+      .replace('"__CF_LAMBDA__"', '"${CloudFormationAnalyzerLambda}"');
+
+    const analysisScheduleRule = new events.CfnRule(this, `${prefix}AnalysisScheduleRule`, {
+      description: `Daily trigger for ${prefix}AnalysisStateMachine.`,
+      scheduleExpression: analysisScheduleParameter.valueAsString,
+      state: 'ENABLED',
+      targets: [
+        {
+          arn: cdk.Fn.ref(stateMachine.logicalId),
+          id: 'AnalysisStateMachineTarget',
+          roleArn: cdk.Fn.getAtt(analysisScheduleRole.logicalId, 'Arn').toString(),
+          input: cdk.Fn.sub(scheduledAnalysisInputTemplate, {
+            AccountId: cdk.Aws.ACCOUNT_ID,
+            CloudTrailBucket: cloudTrailBucketNameParameter.valueAsString,
+            DaysToScan: daysToScanParameter.valueAsString,
+            WebsiteBucket: websiteBucketNameParameter.valueAsString,
+            CloudTrailAnalyzerLambda: cloudtrailAnalyzerLambdaName,
+            CloudFormationAnalyzerLambda: cloudformationAnalyzerLambdaName,
+          }),
+        },
+      ],
+    });
+    analysisScheduleRule.cfnOptions.condition = hasCloudTrailBucket;
 
     // Outputs for cross-stack references
     new cdk.CfnOutput(this, UsageAnalysisStackOutputs.CloudTrailAnalyzerLambdaName, {

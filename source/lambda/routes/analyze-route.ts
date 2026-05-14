@@ -67,7 +67,10 @@ export async function handleAnalyze(event: APIGatewayProxyEvent): Promise<APIGat
     const {
       scope,
       accountIds,
-      analyzers = ['cloudtrail', 'resourceExplorer', 'cloudformation'],
+      // 'resourceExplorer' is intentionally omitted from the default until
+      // its analyzer Lambda exists (see TODO in environment.ts). Callers can
+      // still opt in explicitly via analyzers in the request body.
+      analyzers = ['cloudtrail', 'cloudformation'],
       analyzerParams = {},
     } = body;
 
@@ -102,7 +105,7 @@ export async function handleAnalyze(event: APIGatewayProxyEvent): Promise<APIGat
       analyzers,
       cloudTrailBucket: analyzerParams.cloudtrail?.bucket,
       cloudTrailPrefix: analyzerParams.cloudtrail?.prefix || 'AWSLogs/',
-      daysToScan: analyzerParams.cloudtrail?.daysToScan || 7,
+      daysToScan: analyzerParams.cloudtrail?.daysToScan || 30,
       websiteBucket: getEnv(EnvironmentKey.WEBSITE_BUCKET_NAME),
       cloudtrailAnalyzerLambda: getEnv(EnvironmentKey.CLOUDTRAIL_ANALYZER_LAMBDA_NAME),
       resourceExplorerAnalyzerLambda: getOptionalEnv(EnvironmentKey.RESOURCE_EXPLORER_ANALYZER_LAMBDA_NAME),
