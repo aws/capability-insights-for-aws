@@ -298,15 +298,6 @@ CDK application that defines the two CloudFormation stacks. We use CDK as a deve
 - **API Lambda** (`api-lambda-main.ts`): Backs the API Gateway and routes requests from the website.
 - **DataFetch Lambda** (`data-fetch-lambda-main.ts`): Reads capability data from the source S3 access point, merges data across multiple source folders, and writes the results to the website bucket in both JSON and CSV formats.
 
-##### Lambda packaging
-
-The Lambda zip is assembled by the `package` npm script. It compiles TypeScript with `tsc`, then explicitly copies each runtime dependency (today: `js-yaml` and its transitive `argparse`) into `dist/node_modules` via `node -p 'require.resolve(...)'` so the deployment artifact works regardless of where npm hoists packages in the workspace. AWS SDK packages are excluded — the Lambda runtime provides them.
-
-Alternatives:
-
-- **esbuild bundler**: would tree-shake the dep graph automatically and remove the per-dep `cp -R` line.
-- **CDK `NodejsFunction` construct**: would push bundling into CDK at synth time and remove the npm script entirely.
-
 #### `source/website`
 
 A React dashboard built with [Cloudscape Design System](https://cloudscape.design/) to visualize the capability data.

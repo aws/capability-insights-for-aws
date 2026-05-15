@@ -34,6 +34,7 @@ export enum UsageAnalysisStackOutputs {
   CloudFormationAnalyzerLambdaName = 'CloudFormationAnalyzerLambdaName',
   UsageDecoratorLambdaName = 'UsageDecoratorLambdaName',
   AnalysisStateMachineArn = 'AnalysisStateMachineArn',
+  ConfiguredCloudTrailBucketName = 'ConfiguredCloudTrailBucketName',
 }
 
 /**
@@ -769,6 +770,12 @@ export class UsageAnalysisStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, UsageAnalysisStackOutputs.AnalysisStateMachineArn, {
       value: cdk.Fn.ref(stateMachine.logicalId),
+    });
+    // Surfaced for the integration test runner so it can self-discover
+    // which CloudTrail bucket the analyzers will read from. Construct id
+    // can't reuse `CloudTrailBucketName` (already taken by the parameter).
+    new cdk.CfnOutput(this, UsageAnalysisStackOutputs.ConfiguredCloudTrailBucketName, {
+      value: cloudTrailBucketNameParameter.valueAsString,
     });
   }
 }

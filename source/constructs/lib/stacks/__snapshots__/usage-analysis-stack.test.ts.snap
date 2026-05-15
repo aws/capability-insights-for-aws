@@ -28,6 +28,11 @@ exports[`CloudFormation template matches snapshot 1`] = `
     "CloudTrailAnalyzerLambdaName": {
       "Value": "CapabilityInsightsCloudTrailAnalyzer",
     },
+    "ConfiguredCloudTrailBucketName": {
+      "Value": {
+        "Ref": "CloudTrailBucketName",
+      },
+    },
     "UsageDecoratorLambdaName": {
       "Value": "CapabilityInsightsUsageDecorator",
     },
