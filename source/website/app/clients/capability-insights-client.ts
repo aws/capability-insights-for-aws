@@ -3,6 +3,7 @@ import type { Product } from '@capability-insights/shared/types/capability/produ
 import type { ApiService } from '@capability-insights/shared/types/capability/api';
 import type { CfnResource } from '@capability-insights/shared/types/capability/cfn';
 import type { SyncMetadata } from '@capability-insights/shared/types/sync-metadata';
+import type { UsedCapabilities } from '@capability-insights/shared/types/used-capabilities';
 import { s3Client } from './s3-client';
 
 export enum DataFormat {
@@ -67,6 +68,20 @@ export class CapabilityInsightsClient {
 
   async getLastSyncTime(): Promise<SyncMetadata | null> {
     return await s3Client.fetchJson<SyncMetadata>('/data/sync-metadata.json');
+  }
+
+  async getUsedCapabilities(
+    scope: 'account' | 'organization' = 'account',
+    usageFilter: 'deployed' | 'active_usage' | 'combined' = 'combined',
+  ): Promise<UsedCapabilities | null> {
+    try {
+      const baseUrl = await this.getApiBaseUrl();
+      const res = await fetch(`${baseUrl}/capabilities?scope=${scope}&usageFilter=${usageFilter}`);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
   }
 }
 

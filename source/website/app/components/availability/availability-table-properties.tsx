@@ -57,7 +57,10 @@ export function createColumns({
   ];
 }
 
-export function createFilteringProperties(regions: Region[]): PropertyFilterProps.FilteringProperty[] {
+export function createFilteringProperties(
+  regions: Region[],
+  extraProperties?: PropertyFilterProps.FilteringProperty[],
+): PropertyFilterProps.FilteringProperty[] {
   return [
     {
       key: 'name',
@@ -73,6 +76,7 @@ export function createFilteringProperties(regions: Region[]): PropertyFilterProp
       operators: enumOperators,
       group: 'properties',
     },
+    ...(extraProperties ?? []),
     ...regions.map(r => ({
       key: `region:${r.Region}`,
       propertyLabel: `${r.RegionLongName} (${r.Region})`,
@@ -95,6 +99,7 @@ export function createFilteringFunction(items: RegionalAvailability[]) {
   const resolveKnownKey = (item: RegionalAvailability, key: string): string | undefined => {
     if (key === 'name') return item.name;
     if (key === 'regionalAvailabilityType') return item.regionalAvailabilityType;
+    if (key === 'stack') return item.stacks?.join(',');
     return undefined;
   };
 
@@ -108,7 +113,24 @@ export function createFilteringFunction(items: RegionalAvailability[]) {
     return undefined;
   };
 
-  const tokenMatches = (value: string | undefined, token: PropertyFilterToken): boolean => {
+  const tokenMatches = (value: string | undefined, token: PropertyFilterToken, key?: string): boolean => {
+    if (key === 'stack' && value) {
+      const stackValues = value.split(',');
+      const tokenValues: string[] = Array.isArray(token.value) ? token.value : [token.value];
+      switch (token.operator) {
+        case '=':
+          return stackValues.some(s => tokenValues.includes(s));
+        case '!=':
+          return !stackValues.some(s => tokenValues.includes(s));
+        case ':':
+          return stackValues.some(s => tokenValues.some(tv => s.toLowerCase().includes(tv.toLowerCase())));
+        case '!:':
+          return !stackValues.some(s => tokenValues.some(tv => s.toLowerCase().includes(tv.toLowerCase())));
+        default:
+          return false;
+      }
+    }
+
     const tokenValues: string[] = Array.isArray(token.value) ? token.value : [token.value];
     const stringValue = value ?? '';
 
@@ -135,7 +157,7 @@ export function createFilteringFunction(items: RegionalAvailability[]) {
         ? item.regionalAvailability?.[token.propertyKey.slice(7)]
         : resolve(item, token.propertyKey);
 
-      if (!tokenMatches(value, token)) return false;
+      if (!tokenMatches(value, token, token.propertyKey)) return false;
     }
     return true;
   };

@@ -1,6 +1,6 @@
 import { ProductType, type Product } from '@capability-insights/shared/types/capability/product';
 import type { ApiService } from '@capability-insights/shared/types/capability/api';
-import type { CfnResource } from '@capability-insights/shared/types/capability/cfn';
+import type { CfnResource, EnrichedCfnResourceType } from '@capability-insights/shared/types/capability/cfn';
 import type {
   ProductAvailability,
   ApiAvailability,
@@ -99,6 +99,7 @@ export function fromCfnResources(cfnResources: CfnResource[]): CfnAvailability[]
     });
     for (const rt of svc.resourceTypes) {
       const rtId = `${svcId}-${rt.resourceTypeName}`;
+      const rtStacks = (rt as EnrichedCfnResourceType).usage?.stacks;
       rows.push({
         id: rtId,
         parentId: svcId,
@@ -106,6 +107,7 @@ export function fromCfnResources(cfnResources: CfnResource[]): CfnAvailability[]
         regionalAvailabilityType: RegionalAvailabilityType.RESOURCE_TYPE,
         homepageUrl: rt.resourceTypeHomepage,
         regionalAvailability: rt.regionalAvailability,
+        stacks: rtStacks,
       });
       for (const prop of rt.resourceProperties ?? []) {
         const propId = `${rtId}-${prop.resourcePropertyName}`;
@@ -116,12 +118,14 @@ export function fromCfnResources(cfnResources: CfnResource[]): CfnAvailability[]
           regionalAvailabilityType: RegionalAvailabilityType.PROPERTY,
         });
         for (const config of prop.resourceConfigurations) {
+          const configStacks = config.stacks;
           rows.push({
             id: `${propId}-${config.resourceConfigurationName}`,
             parentId: propId,
             name: config.resourceConfigurationName,
             regionalAvailabilityType: RegionalAvailabilityType.CONFIGURATION,
             regionalAvailability: config.regionalAvailability,
+            stacks: configStacks,
           });
         }
       }
