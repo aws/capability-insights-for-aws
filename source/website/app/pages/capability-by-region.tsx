@@ -51,6 +51,10 @@ export default function CapabilityByRegion() {
   const [allProductRows, setAllProductRows] = useState<ProductAvailability[]>([]);
   const [allApiRows, setAllApiRows] = useState<ApiAvailability[]>([]);
   const [allCfnRows, setAllCfnRows] = useState<CfnAvailability[]>([]);
+  // Cache for personalized rows — avoids re-fetching on every toggle
+  const [usedProductRows, setUsedProductRows] = useState<ProductAvailability[] | null>(null);
+  const [usedApiRows, setUsedApiRows] = useState<ApiAvailability[] | null>(null);
+  const [usedCfnRows, setUsedCfnRows] = useState<CfnAvailability[] | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -75,9 +79,15 @@ export default function CapabilityByRegion() {
         setMyStuffLoading(true);
         const usedCapabilities = await capabilityInsightsClient.getUsedCapabilities('account', 'combined');
         if (usedCapabilities) {
-          setProductRows(fromProducts(usedCapabilities.products));
-          setApiRows(fromApiServices(usedCapabilities.apis));
-          setCfnRows(fromCfnResources(usedCapabilities.cfnResources));
+          const uP = fromProducts(usedCapabilities.products);
+          const uA = fromApiServices(usedCapabilities.apis);
+          const uC = fromCfnResources(usedCapabilities.cfnResources);
+          setUsedProductRows(uP);
+          setUsedApiRows(uA);
+          setUsedCfnRows(uC);
+          setProductRows(uP);
+          setApiRows(uA);
+          setCfnRows(uC);
         } else {
           setProductRows(pRows);
           setApiRows(aRows);
@@ -97,12 +107,25 @@ export default function CapabilityByRegion() {
     async (checked: boolean) => {
       setSearchParams(checked ? { myStuff: 'true' } : {}, { replace: true });
       if (checked) {
+        // Use cached personalized rows if available
+        if (usedProductRows && usedApiRows && usedCfnRows) {
+          setProductRows(usedProductRows);
+          setApiRows(usedApiRows);
+          setCfnRows(usedCfnRows);
+          return;
+        }
         setMyStuffLoading(true);
         const usedCapabilities = await capabilityInsightsClient.getUsedCapabilities('account', 'combined');
         if (usedCapabilities) {
-          setProductRows(fromProducts(usedCapabilities.products));
-          setApiRows(fromApiServices(usedCapabilities.apis));
-          setCfnRows(fromCfnResources(usedCapabilities.cfnResources));
+          const uP = fromProducts(usedCapabilities.products);
+          const uA = fromApiServices(usedCapabilities.apis);
+          const uC = fromCfnResources(usedCapabilities.cfnResources);
+          setUsedProductRows(uP);
+          setUsedApiRows(uA);
+          setUsedCfnRows(uC);
+          setProductRows(uP);
+          setApiRows(uA);
+          setCfnRows(uC);
         }
         setMyStuffLoading(false);
       } else {
@@ -111,7 +134,7 @@ export default function CapabilityByRegion() {
         setCfnRows(allCfnRows);
       }
     },
-    [allProductRows, allApiRows, allCfnRows, setSearchParams],
+    [allProductRows, allApiRows, allCfnRows, usedProductRows, usedApiRows, usedCfnRows, setSearchParams],
   );
 
   const cfnStackFilterProperty = useMemo((): PropertyFilterProps.FilteringProperty[] => {
