@@ -21,6 +21,9 @@ Setup options:
 Deploy options:
   --source-access-point-arn <arn>  S3 access point ARN for capability data source
   --source-folders <folders>       Comma-separated list of source folders (default: public)
+  --enable-usage-analysis          Also deploy the opt-in Usage Analysis stack
+  --cloudtrail-bucket <name>       CloudTrail logs bucket (only with --enable-usage-analysis,
+                                   auto-discovered from your account if omitted)
 
 Global options:
   -y, --yes                        Skip confirmation prompts
@@ -60,11 +63,13 @@ cmd_setup() {
 }
 
 cmd_deploy() {
-  local source_access_point_arn="" source_folders=""
+  local source_access_point_arn="" source_folders="" enable_usage_analysis="" cloudtrail_bucket=""
   while [[ $# -gt 0 ]]; do
     case $1 in
       --source-access-point-arn) source_access_point_arn="$2"; shift 2 ;;
       --source-folders) source_folders="$2"; shift 2 ;;
+      --enable-usage-analysis) enable_usage_analysis="true"; shift ;;
+      --cloudtrail-bucket) cloudtrail_bucket="$2"; shift 2 ;;
       -y|--yes) shift ;;
       *) echo "Unknown option: $1"; usage ;;
     esac
@@ -96,12 +101,21 @@ cmd_deploy() {
     access_point_args+=(--source-folders "$source_folders")
   fi
 
+  local usage_analysis_args=()
+  if [[ "$enable_usage_analysis" == "true" ]]; then
+    usage_analysis_args+=(--enable-usage-analysis)
+    if [[ -n "$cloudtrail_bucket" ]]; then
+      usage_analysis_args+=(--cloudtrail-bucket "$cloudtrail_bucket")
+    fi
+  fi
+
   local deploy_args=(
     --private-vpc-id "$private_vpc_id"
     --backend-subnet-id "$backend_subnet_id"
     --api-access-subnet-id "$api_access_subnet_id"
     --deployment-assets-bucket-name "$deployment_assets_bucket_name"
     "${access_point_args[@]}"
+    "${usage_analysis_args[@]}"
   )
   [[ -n "$AUTO_APPROVE" ]] && deploy_args+=(--yes)
 

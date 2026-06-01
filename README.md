@@ -351,7 +351,12 @@ npm run dev:setup -- --ec2-key-pair ci-key
 
 # Deploy Capability Insights using the CapabilityInsightsSampleEnvironment outputs
 npm run dev:deploy
+
+# Or, to also deploy the opt-in Usage Analysis stack for personalization:
+npm run dev:deploy -- --enable-usage-analysis
 ```
+
+`--enable-usage-analysis` auto-discovers the CloudTrail bucket from your account. Pass `--cloudtrail-bucket <name>` to override.
 
 ### Available Scripts
 
