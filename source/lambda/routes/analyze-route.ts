@@ -5,15 +5,8 @@ import { StatusCode } from '../constants/status-codes';
 import { HttpMethod } from '../constants/http-methods';
 import { EnvironmentKey, getEnv, getOptionalEnv } from '../constants/environment';
 import { Scope } from '../constants/scope';
+import { AnalyzerType, ExecutionStatus } from '../constants/analysis';
 import { logger } from '../util/logger';
-
-type AnalyzerType = 'cloudtrail' | 'resourceExplorer' | 'cloudformation';
-
-const ExecutionStatus = {
-  RUNNING: 'RUNNING',
-  SUCCEEDED: 'SUCCEEDED',
-  FAILED: 'FAILED',
-} as const;
 
 interface CloudTrailConfig {
   bucket: string;
@@ -61,7 +54,22 @@ export async function handleAnalyze(event: APIGatewayProxyEvent): Promise<APIGat
 
   // Handle POST request - start new analysis
   try {
-    const stateMachineArn = getEnv(EnvironmentKey.ANALYSIS_STATE_MACHINE_ARN);
+    // The Usage Analysis stack is optional. When not deployed, the API Lambda's
+    // env vars for the state machine + analyzer Lambdas come through empty.
+    // Detect that explicitly and surface a friendly 503 instead of leaking
+    // a generic "Missing required environment variable: ..." 500 to the UI.
+    const stateMachineArn = getOptionalEnv(EnvironmentKey.ANALYSIS_STATE_MACHINE_ARN);
+    if (!stateMachineArn) {
+      return {
+        statusCode: StatusCode.SERVICE_UNAVAILABLE,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({
+          error: 'Usage Analysis is not enabled',
+          message:
+            'The Usage Analysis stack is not deployed. Re-run `npm run deploy -- --enable-usage-analysis` to enable personalization.',
+        }),
+      };
+    }
 
     const body: AnalyzeRequest = JSON.parse(event.body || '{}');
     const {
@@ -70,7 +78,7 @@ export async function handleAnalyze(event: APIGatewayProxyEvent): Promise<APIGat
       // 'resourceExplorer' is intentionally omitted from the default until
       // its analyzer Lambda exists (see TODO in environment.ts). Callers can
       // still opt in explicitly via analyzers in the request body.
-      analyzers = ['cloudtrail', 'cloudformation'],
+      analyzers = [AnalyzerType.CLOUDTRAIL, AnalyzerType.CLOUDFORMATION],
       analyzerParams = {},
     } = body;
 
@@ -82,7 +90,12 @@ export async function handleAnalyze(event: APIGatewayProxyEvent): Promise<APIGat
       };
     }
 
-    if (analyzers.includes('cloudtrail') && !analyzerParams.cloudtrail?.bucket) {
+    // Fall back to the deploy-time-configured bucket so UI callers don't have
+    // to re-supply it on every request.
+    const cloudTrailBucket =
+      analyzerParams.cloudtrail?.bucket || getOptionalEnv(EnvironmentKey.CONFIGURED_CLOUDTRAIL_BUCKET);
+
+    if (analyzers.includes(AnalyzerType.CLOUDTRAIL) && !cloudTrailBucket) {
       return {
         statusCode: StatusCode.BAD_REQUEST,
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
@@ -103,7 +116,7 @@ export async function handleAnalyze(event: APIGatewayProxyEvent): Promise<APIGat
       scope,
       accounts,
       analyzers,
-      cloudTrailBucket: analyzerParams.cloudtrail?.bucket,
+      cloudTrailBucket,
       cloudTrailPrefix: analyzerParams.cloudtrail?.prefix || 'AWSLogs/',
       daysToScan: analyzerParams.cloudtrail?.daysToScan || 30,
       websiteBucket: getEnv(EnvironmentKey.WEBSITE_BUCKET_NAME),

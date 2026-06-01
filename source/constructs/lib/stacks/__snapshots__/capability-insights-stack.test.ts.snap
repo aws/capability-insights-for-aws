@@ -60,6 +60,11 @@ exports[`CloudFormation template matches snapshot 1`] = `
       "Description": "Name of the CloudTrail Analyzer Lambda function.",
       "Type": "String",
     },
+    "ConfiguredCloudTrailBucketName": {
+      "Default": "",
+      "Description": "CloudTrail bucket configured at deploy time. Plumbed to the API Lambda so the UI can trigger analysis without re-supplying the bucket on every request.",
+      "Type": "String",
+    },
     "DeploymentAssetsBucketApiLambdaFunctionCodeZipPath": {
       "Default": "lambdaAssets.zip",
       "Description": "Path in the CapabilityInsights deployment assets bucket where Capability Insights's API Lambda function code zip is located.",
@@ -415,6 +420,9 @@ exports[`CloudFormation template matches snapshot 1`] = `
             "CLOUDTRAIL_ANALYZER_LAMBDA_NAME": {
               "Ref": "CloudTrailAnalyzerLambdaName",
             },
+            "CONFIGURED_CLOUDTRAIL_BUCKET": {
+              "Ref": "ConfiguredCloudTrailBucketName",
+            },
             "DATA_FETCH_LAMBDA_NAME": "CapabilityInsightsDataFetchLambda",
             "WEBSITE_BUCKET_NAME": {
               "Ref": "capabilityinsightswebsite",
@@ -539,7 +547,6 @@ exports[`CloudFormation template matches snapshot 1`] = `
                 {
                   "Action": [
                     "states:StartExecution",
-                    "states:DescribeExecution",
                   ],
                   "Effect": "Allow",
                   "Resource": {
@@ -550,6 +557,40 @@ exports[`CloudFormation template matches snapshot 1`] = `
                       },
                       {
                         "Fn::Sub": "arn:\${AWS::Partition}:states:\${AWS::Region}:\${AWS::AccountId}:stateMachine:none",
+                      },
+                    ],
+                  },
+                },
+                {
+                  "Action": [
+                    "states:DescribeExecution",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::If": [
+                      "HasAnalysisStateMachine",
+                      {
+                        "Fn::Sub": [
+                          "arn:\${AWS::Partition}:states:\${AWS::Region}:\${AWS::AccountId}:execution:\${StateMachineName}:*",
+                          {
+                            "StateMachineName": {
+                              "Fn::Select": [
+                                6,
+                                {
+                                  "Fn::Split": [
+                                    ":",
+                                    {
+                                      "Ref": "AnalysisStateMachineArn",
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                          },
+                        ],
+                      },
+                      {
+                        "Fn::Sub": "arn:\${AWS::Partition}:states:\${AWS::Region}:\${AWS::AccountId}:execution:none:*",
                       },
                     ],
                   },

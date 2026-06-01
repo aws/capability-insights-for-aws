@@ -28,6 +28,7 @@ The dashboard covers:
 - **Services and features** — availability status, expected launch dates, and expansion plans per region
 - **API operations** — individual API action availability per region for each AWS service
 - **CloudFormation resource types** — which resource types are supported in each region
+- **Personalized usage (opt-in)** — a "My Stuff" view that filters everything down to services, APIs, and resources actually used in your account, derived from CloudTrail and CloudFormation
 
 ![Dashboard overview](docs/images/dashboard-overview.png)
 
@@ -37,7 +38,7 @@ The solution deploys entirely within your VPC so that all data remains within yo
 
 ![High-level architecture](docs/images/high-level-architecture.png)
 
-The solution deploys a static website, REST API, and Lambda functions into your VPC. For a detailed breakdown of all resources, see [Architecture](#architecture).
+The solution deploys a static website, REST API, and Lambda functions into your VPC. Personalization is provided by an opt-in second stack that adds a Step Functions state machine and analyzer Lambdas that read your account's CloudTrail logs and CloudFormation stacks. For a detailed breakdown of all resources, see [Architecture](#architecture).
 
 ## Installation
 
@@ -112,7 +113,8 @@ npm run deploy -- \
   --api-access-subnet-id subnet-0def456 \
   --deployment-assets-bucket-name my-deploy-bucket \
   --source-access-point-arn arn:aws:s3:us-east-1:123456789012:accesspoint/my-access-point \
-  --source-folders aws-cn,public
+  --source-folders aws-cn,public \
+  --enable-usage-analysis
 ```
 
 | Flag                              | Description                                                                                                             |
@@ -123,6 +125,8 @@ npm run deploy -- \
 | `--deployment-assets-bucket-name` | S3 bucket where deployment assets (Lambda code zip) are stored.                                                         |
 | `--source-access-point-arn`       | S3 access point ARN for the capability data source (provided during onboarding).                                        |
 | `--source-folders`                | Comma-separated list of data sources to pull from (default: `public`). Include additional partitions if granted access. |
+| `--enable-usage-analysis`         | Deploy the opt-in Usage Analysis stack to enable personalization.                                                       |
+| `--cloudtrail-bucket`             | CloudTrail logs bucket used by the analyzer (only with `--enable-usage-analysis`). Auto-discovered if omitted.          |
 
 #### Teardown
 
@@ -238,6 +242,12 @@ Open the side navigation to switch between the Capability by Region dashboard an
 
 ![Settings](docs/images/user-guide-settings.png)
 
+### Personalizing the dashboard (opt-in)
+
+If you deployed with `--enable-usage-analysis`, the dashboard offers a **My Stuff** toggle that filters services, APIs, and CloudFormation resources to only what's actually used in your account. The data is produced by analyzers that read your CloudTrail logs and active CloudFormation stacks, then written back to the website bucket as a personalized data set.
+
+The analysis runs on a daily schedule. You can also trigger it on demand from the Settings page using the **Run usage analysis** button. The page shows progress and the result counts when the run completes; refresh the dashboard afterwards to see the updated personalization.
+
 ## Architecture
 
 This repository provides two CloudFormation stacks:
@@ -271,6 +281,20 @@ A development stack that mimics a customer environment for testing. Customers de
 | EC2 Instance (Linux)      | Amazon Linux 2023 instance for testing            |
 | IAM Role                  | Instance role with SSM and S3 access              |
 
+### Usage Analysis Stack (opt-in)
+
+Adds personalization. Deployed when you pass `--enable-usage-analysis` to `npm run deploy`. Reads CloudTrail logs (via Athena) and active CloudFormation stacks to build a per-account view of services, APIs, and CloudFormation resources that are actually in use, then writes a personalized data set back to the website bucket. The dashboard's "My Stuff" toggle reads that data set.
+
+| Resource                       | Description                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------ |
+| Step Functions State Machine   | Orchestrates the analyzers in parallel and runs the decorator                              |
+| CloudTrail Analyzer Lambda     | Queries CloudTrail logs in Athena and emits per-service usage records                      |
+| CloudFormation Analyzer Lambda | Lists active CloudFormation stacks and emits per-resource records                          |
+| Usage Decorator Lambda         | Joins analyzer output with the master capability catalog and writes the personalized files |
+| Glue Database / Table          | Schema over the CloudTrail bucket so the analyzer can run Athena queries                   |
+| Lake Formation Permissions     | Grants the analyzer role read access to the Glue database                                  |
+| EventBridge Rule               | Schedules the state machine to run daily (configurable via `AnalysisSchedule` parameter)   |
+
 ### Package Structure
 
 This project uses [npm workspaces](https://docs.npmjs.com/cli/using-npm/workspaces) to manage four packages under `source/`.
@@ -297,6 +321,7 @@ CDK application that defines the two CloudFormation stacks. We use CDK as a deve
 
 - **API Lambda** (`api-lambda-main.ts`): Backs the API Gateway and routes requests from the website.
 - **DataFetch Lambda** (`data-fetch-lambda-main.ts`): Reads capability data from the source S3 access point, merges data across multiple source folders, and writes the results to the website bucket in both JSON and CSV formats.
+- **CloudTrail Analyzer** (`cloudtrail-analyzer.ts`), **CloudFormation Analyzer** (`cloudformation-analyzer.ts`), **Usage Decorator** (`usage-decorator.ts`): Power the opt-in Usage Analysis stack. Triggered by a Step Functions state machine that runs the two analyzers in parallel, then the decorator merges their output with the master catalog into personalized files for the dashboard's "My Stuff" view.
 
 #### `source/website`
 

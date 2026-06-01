@@ -40,17 +40,21 @@ describe('API Lambda role', () => {
     });
   });
 
-  test('has Step Functions access policy', () => {
+  test('has Step Functions access policy with separate statements for state machine and execution ARNs', () => {
     template.hasResourceProperties('AWS::IAM::Role', {
       Policies: Match.arrayWith([
         Match.objectLike({
           PolicyName: 'StepFunctionsAccess',
           PolicyDocument: {
             Statement: [
-              {
+              Match.objectLike({
                 Effect: 'Allow',
-                Action: ['states:StartExecution', 'states:DescribeExecution'],
-              },
+                Action: ['states:StartExecution'],
+              }),
+              Match.objectLike({
+                Effect: 'Allow',
+                Action: ['states:DescribeExecution'],
+              }),
             ],
           },
         }),

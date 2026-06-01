@@ -62,6 +62,11 @@ exports[`CloudFormation template matches snapshot 1`] = `
       "MinValue": 1,
       "Type": "Number",
     },
+    "DeployerRoleName": {
+      "Default": "Admin",
+      "Description": "Name of the IAM role used to deploy this stack. Added as a Lake Formation Data Lake Admin so subsequent LF Permissions can be granted. Defaults to "Admin".",
+      "Type": "String",
+    },
     "DeploymentAssetsBucketName": {
       "Default": "test-deployment-bucket",
       "Description": "Name of S3 bucket where deployment assets (Lambda code zip) are located.",
@@ -741,10 +746,141 @@ exports[`CloudFormation template matches snapshot 1`] = `
       },
       "Type": "AWS::Glue::Table",
     },
+    "CapabilityInsightsLakeFormationBootstrap": {
+      "DependsOn": [
+        "CapabilityInsightsCloudTrailAnalyzerRole",
+      ],
+      "Properties": {
+        "AdminsToAdd": [
+          {
+            "Fn::GetAtt": [
+              "CapabilityInsightsCloudTrailAnalyzerRole",
+              "Arn",
+            ],
+          },
+          {
+            "Fn::Sub": [
+              "arn:\${AWS::Partition}:iam::\${AWS::AccountId}:role/\${DeployerRoleName}",
+              {
+                "DeployerRoleName": {
+                  "Ref": "DeployerRoleName",
+                },
+              },
+            ],
+          },
+        ],
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsLakeFormationBootstrapLambda",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::CloudFormation::CustomResource",
+    },
+    "CapabilityInsightsLakeFormationBootstrapLambda": {
+      "DependsOn": [
+        "CapabilityInsightsLakeFormationBootstrapLambdaRole",
+      ],
+      "Properties": {
+        "Code": {
+          "ZipFile": "import boto3
+import cfnresponse
+
+lf = boto3.client('lakeformation')
+
+def lambda_handler(event, context):
+    try:
+        # Don't strip LF admins on stack delete — would orphan any
+        # LF-protected resources still managed by those admins.
+        if event['RequestType'] == 'Delete':
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            return
+
+        admins_to_add = event['ResourceProperties']['AdminsToAdd']
+        if isinstance(admins_to_add, str):
+            admins_to_add = [admins_to_add]
+
+        existing = lf.get_data_lake_settings()['DataLakeSettings']
+        existing_admins = existing.get('DataLakeAdmins', []) or []
+        existing_arns = {a.get('DataLakePrincipalIdentifier') for a in existing_admins}
+
+        merged = list(existing_admins)
+        for arn in admins_to_add:
+            if arn and arn not in existing_arns:
+                merged.append({'DataLakePrincipalIdentifier': arn})
+                existing_arns.add(arn)
+
+        new_settings = dict(existing)
+        new_settings['DataLakeAdmins'] = merged
+        lf.put_data_lake_settings(DataLakeSettings=new_settings)
+
+        cfnresponse.send(event, context, cfnresponse.SUCCESS, {'AdminsConfigured': str(len(merged))})
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})",
+        },
+        "FunctionName": "CapabilityInsightsLakeFormationBootstrapLambda",
+        "Handler": "index.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsLakeFormationBootstrapLambdaRole",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.11",
+        "Timeout": 60,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CapabilityInsightsLakeFormationBootstrapLambdaRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          },
+        ],
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "lakeformation:GetDataLakeSettings",
+                    "lakeformation:PutDataLakeSettings",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": "*",
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "LakeFormationBootstrap",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsLakeFormationBootstrapLambdaRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
     "CapabilityInsightsLakeFormationDbPermission": {
       "DependsOn": [
         "CapabilityInsightsCloudTrailAnalyzerRole",
         "CapabilityInsightsCloudTrailDatabase",
+        "CapabilityInsightsLakeFormationBootstrap",
       ],
       "Properties": {
         "DataLakePrincipal": {
@@ -770,6 +906,7 @@ exports[`CloudFormation template matches snapshot 1`] = `
       "DependsOn": [
         "CapabilityInsightsCloudTrailAnalyzerRole",
         "CapabilityInsightsCloudTrailTable",
+        "CapabilityInsightsLakeFormationBootstrap",
       ],
       "Properties": {
         "DataLakePrincipal": {

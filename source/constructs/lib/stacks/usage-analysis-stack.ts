@@ -12,6 +12,14 @@ export interface UsageAnalysisStackProps extends cdk.StackProps {
   lambdaCodeZipPath?: string;
   cloudTrailBucketName?: string;
   /**
+   * Name of the IAM role used to deploy this stack. Added as a Lake Formation
+   * Data Lake Admin during stack creation so that subsequent
+   * `AWS::LakeFormation::Permissions` resources can be created. On a fresh
+   * account no admins are configured by default, which causes those resources
+   * to fail with AccessDeniedException. Defaults to `Admin`.
+   */
+  deployerRoleName?: string;
+  /**
    * EventBridge schedule expression for automated analysis runs. Accepts the
    * AWS Schedule Expression syntax: `rate(...)` for fixed intervals (`rate(1 day)`,
    * `rate(12 hours)`) or `cron(...)` for time-of-day scheduling
@@ -80,6 +88,13 @@ export class UsageAnalysisStack extends cdk.Stack {
       type: 'String',
       description: 'Name of the S3 bucket containing CloudTrail logs for usage analysis.',
       default: props?.cloudTrailBucketName ?? '',
+    });
+
+    const deployerRoleNameParameter = new cdk.CfnParameter(this, 'DeployerRoleName', {
+      type: 'String',
+      description:
+        'Name of the IAM role used to deploy this stack. Added as a Lake Formation Data Lake Admin so subsequent LF Permissions can be granted. Defaults to "Admin".',
+      default: props?.deployerRoleName ?? 'Admin',
     });
 
     const analysisScheduleParameter = new cdk.CfnParameter(this, 'AnalysisSchedule', {
@@ -286,6 +301,108 @@ export class UsageAnalysisStack extends cdk.Stack {
       ],
     });
 
+    // Bootstrap Lake Formation Data Lake Admins. Adding LF Permissions resources
+    // (below) requires the deployer principal to be a Data Lake Admin. On a fresh
+    // account, no admins are configured, so AWS::LakeFormation::Permissions creation
+    // fails with AccessDeniedException. This custom resource appends the analyzer
+    // role and the deployer role to the existing admin list so the stack can
+    // self-bootstrap LF without clobbering pre-existing admins.
+    //
+    // Implemented as a hand-rolled L1 (lambda.CfnFunction with inline zipFile
+    // + cdk.CfnCustomResource) rather than cr.AwsCustomResource because the
+    // L2 construct ships its provider Lambda code via CDK assets, which this
+    // codebase's deploy.sh flow does not upload (it uses `aws cloudformation
+    // deploy` directly, not `cdk deploy`).
+    const lakeFormationBootstrapLambdaName = `${prefix}LakeFormationBootstrapLambda`;
+    const lakeFormationBootstrapRoleName = `${prefix}LakeFormationBootstrapLambdaRole`;
+    const lakeFormationBootstrapRoleNameFn = cdk.Fn.sub(`${lakeFormationBootstrapRoleName}-\${AWS::Region}`);
+    const lakeFormationBootstrapRole = new iam.CfnRole(this, lakeFormationBootstrapRoleName, {
+      roleName: lakeFormationBootstrapRoleNameFn,
+      assumeRolePolicyDocument: {
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Service: 'lambda.amazonaws.com' },
+            Action: 'sts:AssumeRole',
+          },
+        ],
+      },
+      managedPolicyArns: [cdk.Fn.sub('arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole')],
+      policies: [
+        {
+          policyName: 'LakeFormationBootstrap',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: ['lakeformation:GetDataLakeSettings', 'lakeformation:PutDataLakeSettings'],
+                Resource: '*',
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const lakeFormationBootstrapLambda = new lambda.CfnFunction(this, lakeFormationBootstrapLambdaName, {
+      functionName: lakeFormationBootstrapLambdaName,
+      runtime: 'python3.11',
+      handler: 'index.lambda_handler',
+      role: cdk.Fn.getAtt(lakeFormationBootstrapRole.logicalId, 'Arn').toString(),
+      code: {
+        zipFile: `import boto3
+import cfnresponse
+
+lf = boto3.client('lakeformation')
+
+def lambda_handler(event, context):
+    try:
+        # Don't strip LF admins on stack delete — would orphan any
+        # LF-protected resources still managed by those admins.
+        if event['RequestType'] == 'Delete':
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            return
+
+        admins_to_add = event['ResourceProperties']['AdminsToAdd']
+        if isinstance(admins_to_add, str):
+            admins_to_add = [admins_to_add]
+
+        existing = lf.get_data_lake_settings()['DataLakeSettings']
+        existing_admins = existing.get('DataLakeAdmins', []) or []
+        existing_arns = {a.get('DataLakePrincipalIdentifier') for a in existing_admins}
+
+        merged = list(existing_admins)
+        for arn in admins_to_add:
+            if arn and arn not in existing_arns:
+                merged.append({'DataLakePrincipalIdentifier': arn})
+                existing_arns.add(arn)
+
+        new_settings = dict(existing)
+        new_settings['DataLakeAdmins'] = merged
+        lf.put_data_lake_settings(DataLakeSettings=new_settings)
+
+        cfnresponse.send(event, context, cfnresponse.SUCCESS, {'AdminsConfigured': str(len(merged))})
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})`,
+      },
+      timeout: 60,
+    });
+    lakeFormationBootstrapLambda.addDependency(lakeFormationBootstrapRole);
+
+    const lakeFormationBootstrap = new cdk.CfnCustomResource(this, `${prefix}LakeFormationBootstrap`, {
+      serviceToken: cdk.Fn.getAtt(lakeFormationBootstrapLambda.logicalId, 'Arn').toString(),
+    });
+    lakeFormationBootstrap.addPropertyOverride('AdminsToAdd', [
+      cdk.Fn.getAtt(cloudtrailAnalyzerRole.logicalId, 'Arn').toString(),
+      cdk.Fn.sub('arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${DeployerRoleName}', {
+        DeployerRoleName: deployerRoleNameParameter.valueAsString,
+      }),
+    ]);
+    lakeFormationBootstrap.addDependency(cloudtrailAnalyzerRole);
+
     // Lake Formation permissions for the Lambda role to access the Glue database and table
     const lakeFormationDbPermission = new lakeformation.CfnPermissions(this, `${prefix}LakeFormationDbPermission`, {
       dataLakePrincipal: {
@@ -300,6 +417,7 @@ export class UsageAnalysisStack extends cdk.Stack {
     });
     lakeFormationDbPermission.addDependency(glueDatabase);
     lakeFormationDbPermission.addDependency(cloudtrailAnalyzerRole);
+    lakeFormationDbPermission.node.addDependency(lakeFormationBootstrap);
 
     const lakeFormationTablePermission = new lakeformation.CfnPermissions(
       this,
@@ -319,6 +437,7 @@ export class UsageAnalysisStack extends cdk.Stack {
     );
     lakeFormationTablePermission.addDependency(glueTable);
     lakeFormationTablePermission.addDependency(cloudtrailAnalyzerRole);
+    lakeFormationTablePermission.node.addDependency(lakeFormationBootstrap);
 
     const cloudtrailAnalyzerLambda = new lambda.CfnFunction(this, cloudtrailAnalyzerLambdaName, {
       functionName: cloudtrailAnalyzerLambdaName,

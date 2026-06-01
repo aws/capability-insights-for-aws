@@ -11,6 +11,13 @@ export const EnvironmentKey = {
   CLOUDFORMATION_ANALYZER_LAMBDA_NAME: 'CLOUDFORMATION_ANALYZER_LAMBDA_NAME',
   ANALYSIS_STATE_MACHINE_ARN: 'ANALYSIS_STATE_MACHINE_ARN',
   /**
+   * Configured CloudTrail bucket from the Usage Analysis stack. When set, the
+   * analyze route uses it as a fallback if the request body omits
+   * `analyzerParams.cloudtrail.bucket`. This lets the UI trigger analysis
+   * without re-prompting for the bucket every time.
+   */
+  CONFIGURED_CLOUDTRAIL_BUCKET: 'CONFIGURED_CLOUDTRAIL_BUCKET',
+  /**
    * When `"true"` (default), the usage decorator includes all `childProducts`
    * (features) for every service kept in the personalized view — even features
    * not individually detected as used. Set to `"false"` to narrow each service

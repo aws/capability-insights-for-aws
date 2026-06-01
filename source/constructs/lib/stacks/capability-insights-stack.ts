@@ -17,6 +17,7 @@ export interface CapabilityInsightsStackProps extends cdk.StackProps {
   analysisStateMachineArn?: string;
   cloudTrailAnalyzerLambdaName?: string;
   cloudFormationAnalyzerLambdaName?: string;
+  configuredCloudTrailBucketName?: string;
 }
 
 export enum CapabilityInsightsStackOutputs {
@@ -98,6 +99,13 @@ export class CapabilityInsightsStack extends cdk.Stack {
       type: 'String',
       description: 'Name of the CloudFormation Analyzer Lambda function.',
       default: props?.cloudFormationAnalyzerLambdaName ?? '',
+    });
+
+    const configuredCloudTrailBucketParameter = new cdk.CfnParameter(this, 'ConfiguredCloudTrailBucketName', {
+      type: 'String',
+      description:
+        'CloudTrail bucket configured at deploy time. Plumbed to the API Lambda so the UI can trigger analysis without re-supplying the bucket on every request.',
+      default: props?.configuredCloudTrailBucketName ?? '',
     });
 
     const sourceFoldersParameter = new cdk.CfnParameter(this, 'SourceFolders', {
@@ -388,12 +396,34 @@ export class CapabilityInsightsStack extends cdk.Stack {
             Version: '2012-10-17',
             Statement: [
               {
+                // StartExecution operates on the state machine ARN.
                 Effect: 'Allow',
-                Action: ['states:StartExecution', 'states:DescribeExecution'],
+                Action: ['states:StartExecution'],
                 Resource: cdk.Fn.conditionIf(
                   hasAnalysisStateMachine.logicalId,
                   analysisStateMachineArnParameter.valueAsString,
                   cdk.Fn.sub('arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:none'),
+                ),
+              },
+              {
+                // DescribeExecution operates on the execution ARN, which has
+                // a different format than the state machine ARN
+                // (`arn:...:execution:<state-machine-name>:<execution-id>`).
+                // Authorize any execution under the configured state machine.
+                Effect: 'Allow',
+                Action: ['states:DescribeExecution'],
+                Resource: cdk.Fn.conditionIf(
+                  hasAnalysisStateMachine.logicalId,
+                  cdk.Fn.sub(
+                    'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${StateMachineName}:*',
+                    {
+                      StateMachineName: cdk.Fn.select(
+                        6,
+                        cdk.Fn.split(':', analysisStateMachineArnParameter.valueAsString),
+                      ),
+                    },
+                  ),
+                  cdk.Fn.sub('arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:none:*'),
                 ),
               },
             ],
@@ -452,6 +482,7 @@ export class CapabilityInsightsStack extends cdk.Stack {
           CLOUDTRAIL_ANALYZER_LAMBDA_NAME: cloudTrailAnalyzerLambdaNameParameter.valueAsString,
           CLOUDFORMATION_ANALYZER_LAMBDA_NAME: cloudformationAnalyzerLambdaNameParameter.valueAsString,
           ANALYSIS_STATE_MACHINE_ARN: analysisStateMachineArnParameter.valueAsString,
+          CONFIGURED_CLOUDTRAIL_BUCKET: configuredCloudTrailBucketParameter.valueAsString,
         },
       },
     });

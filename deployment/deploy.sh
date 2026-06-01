@@ -19,8 +19,9 @@ Deploy options (pass as flags or omit to be prompted):
   --deployment-assets-bucket-name <name> S3 bucket for deployment assets
   --source-access-point-arn <arn>        S3 access point ARN for capability data source
   --source-folders <folders>             Comma-separated list of source folders (default: public)
-  --enable-usage-analysis                Deploy the Usage Analysis stack (requires --cloudtrail-bucket)
-  --cloudtrail-bucket <name>             S3 bucket containing CloudTrail logs (for usage analysis)
+  --enable-usage-analysis                Deploy the Usage Analysis stack
+  --cloudtrail-bucket <name>             S3 bucket containing CloudTrail logs (for usage analysis,
+                                         auto-discovered from your account's CloudTrail trails if omitted)
   -y, --yes                              Skip confirmation prompts
 
 Examples:
@@ -94,6 +95,28 @@ cmd_deploy() {
       source_folders="public"
     fi
   done
+
+  # Auto-discover a CloudTrail bucket when --enable-usage-analysis is set
+  # but --cloudtrail-bucket was not. Queries CloudTrail directly for the
+  # account's configured trails and pulls the S3 bucket from the matching
+  # one. If multiple match, list and prompt; if none, prompt with a hint.
+  if [[ "$enable_usage_analysis" == "true" && -z "$cloudtrail_bucket" ]]; then
+    local discovered_buckets
+    discovered_buckets=$(aws cloudtrail describe-trails --query 'trailList[].S3BucketName' --output text 2>/dev/null | tr '\t' '\n' | grep -v '^$' | sort -u || true)
+    local discovered_count
+    discovered_count=$(printf '%s\n' "$discovered_buckets" | grep -c . || true)
+    if [[ "$discovered_count" == "1" ]]; then
+      cloudtrail_bucket="$discovered_buckets"
+      echo "Auto-discovered CloudTrail bucket: $cloudtrail_bucket"
+    elif [[ "$discovered_count" -gt 1 ]]; then
+      echo "Multiple CloudTrail buckets found:"
+      printf '  %s\n' $discovered_buckets
+      prompt_if_empty cloudtrail_bucket "CloudTrailBucket (paste one of the above)"
+    else
+      echo "No CloudTrail trails found in this account/region. Configure CloudTrail to log to S3, or pass --cloudtrail-bucket explicitly."
+      prompt_if_empty cloudtrail_bucket "CloudTrailBucket"
+    fi
+  fi
 
   echo ""
   echo "Deploying to account $AWS_ACCOUNT in $AWS_REGION"
@@ -223,6 +246,7 @@ cmd_deploy() {
           AnalysisStateMachineArn="$analysis_state_machine_arn" \
           CloudTrailAnalyzerLambdaName="$cloudtrail_analyzer_lambda_name" \
           CloudFormationAnalyzerLambdaName="$cloudformation_analyzer_lambda_name" \
+          ConfiguredCloudTrailBucketName="$cloudtrail_bucket" \
         --capabilities CAPABILITY_NAMED_IAM \
         --no-cli-pager || true
       echo "  ✓ Insights stack updated with analysis integration."

@@ -91,7 +91,44 @@ describe('analyze-route', () => {
       expect(JSON.parse(result.body).error).toContain('cloudtrail.bucket');
     });
 
-    it('returns 500 when state machine ARN is not configured', async () => {
+    it('falls back to CONFIGURED_CLOUDTRAIL_BUCKET env var when bucket is omitted from the request', async () => {
+      vi.stubEnv('CONFIGURED_CLOUDTRAIL_BUCKET', 'env-fallback-bucket');
+      sfnMock.on(StartExecutionCommand).resolves({
+        executionArn: 'arn:aws:states:us-east-1:123:execution:test:fallback-run',
+      });
+
+      const event = makeEvent({
+        body: JSON.stringify({ scope: 'account' }),
+      });
+
+      const result = await handleAnalyze(event);
+      expect(result.statusCode).toBe(202);
+
+      const input = JSON.parse(sfnMock.commandCalls(StartExecutionCommand)[0].args[0].input.input!);
+      expect(input.cloudTrailBucket).toBe('env-fallback-bucket');
+    });
+
+    it('prefers analyzerParams.cloudtrail.bucket over CONFIGURED_CLOUDTRAIL_BUCKET when both are set', async () => {
+      vi.stubEnv('CONFIGURED_CLOUDTRAIL_BUCKET', 'env-fallback-bucket');
+      sfnMock.on(StartExecutionCommand).resolves({
+        executionArn: 'arn:aws:states:us-east-1:123:execution:test:override-run',
+      });
+
+      const event = makeEvent({
+        body: JSON.stringify({
+          scope: 'account',
+          analyzerParams: { cloudtrail: { bucket: 'request-body-bucket' } },
+        }),
+      });
+
+      const result = await handleAnalyze(event);
+      expect(result.statusCode).toBe(202);
+
+      const input = JSON.parse(sfnMock.commandCalls(StartExecutionCommand)[0].args[0].input.input!);
+      expect(input.cloudTrailBucket).toBe('request-body-bucket');
+    });
+
+    it('returns 503 when state machine ARN is not configured (Usage Analysis stack not deployed)', async () => {
       vi.stubEnv('ANALYSIS_STATE_MACHINE_ARN', '');
       delete process.env.ANALYSIS_STATE_MACHINE_ARN;
 
@@ -100,8 +137,10 @@ describe('analyze-route', () => {
       });
 
       const result = await handleAnalyze(event);
-      expect(result.statusCode).toBe(500);
-      expect(JSON.parse(result.body).error).toContain('Analysis failed');
+      expect(result.statusCode).toBe(503);
+      const body = JSON.parse(result.body) as { error: string; message: string };
+      expect(body.error).toContain('Usage Analysis is not enabled');
+      expect(body.message).toContain('--enable-usage-analysis');
     });
 
     it('uses default analyzers when not specified', async () => {
