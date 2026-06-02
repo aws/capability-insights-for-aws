@@ -132,6 +132,23 @@ exports[`CloudFormation template matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::VPCGatewayAttachment",
     },
+    "CapabilityInsightsSampleEnvironmentVpcPrivateRouteTable": {
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsSampleEnvironmentVpcPrivateRouteTable",
+          },
+        ],
+        "VpcId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpc",
+            "VpcId",
+          ],
+        },
+      },
+      "Type": "AWS::EC2::RouteTable",
+    },
     "CapabilityInsightsSampleEnvironmentVpcPrivateSubnet": {
       "Properties": {
         "AvailabilityZone": {
@@ -158,6 +175,23 @@ exports[`CloudFormation template matches snapshot 1`] = `
         },
       },
       "Type": "AWS::EC2::Subnet",
+    },
+    "CapabilityInsightsSampleEnvironmentVpcPrivateSubnetRouteTableAssociation": {
+      "Properties": {
+        "RouteTableId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpcPrivateRouteTable",
+            "RouteTableId",
+          ],
+        },
+        "SubnetId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpcPrivateSubnet",
+            "SubnetId",
+          ],
+        },
+      },
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
     },
     "CapabilityInsightsSampleEnvironmentVpcPublicRouteTable": {
       "Properties": {
@@ -286,6 +320,12 @@ exports[`CloudFormation template matches snapshot 1`] = `
           {
             "Fn::GetAtt": [
               "CapabilityInsightsSampleEnvironmentVpcPublicRouteTable",
+              "RouteTableId",
+            ],
+          },
+          {
+            "Fn::GetAtt": [
+              "CapabilityInsightsSampleEnvironmentVpcPrivateRouteTable",
               "RouteTableId",
             ],
           },

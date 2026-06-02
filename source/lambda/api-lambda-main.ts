@@ -4,6 +4,8 @@ import { HttpMethod } from './constants/http-methods';
 import { ErrorResponse } from './constants/errors';
 import { logger } from './util/logger';
 import { syncCapabilityDataRoute } from './routes/sync-capability-data-route';
+import { handleAnalyze } from './routes/analyze-route';
+import { getUsedCapabilities } from './routes/usage-route';
 const routes: Map<string, RouteHandler> = new Map();
 
 function registerRoute(method: string, path: string, handler: RouteHandler) {
@@ -12,6 +14,11 @@ function registerRoute(method: string, path: string, handler: RouteHandler) {
 
 // --- Register routes ---
 registerRoute(HttpMethod.POST, '/syncCapabilityData', syncCapabilityDataRoute);
+// Usage analysis: start analysis (POST) and poll status (GET)
+registerRoute(HttpMethod.POST, '/analysis', handleAnalyze);
+registerRoute(HttpMethod.GET, '/analysis', handleAnalyze);
+// Account-aware filtering: returns services/APIs based on usage data
+registerRoute(HttpMethod.GET, '/capabilities', getUsedCapabilities);
 
 // --- Main handler ---
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
