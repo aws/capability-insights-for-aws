@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useCollection } from '@cloudscape-design/collection-hooks';
 import Table from '@cloudscape-design/components/table';
 import PropertyFilter from '@cloudscape-design/components/property-filter';
+import type { PropertyFilterProps } from '@cloudscape-design/components/property-filter';
 import type { CollectionPreferencesProps } from '@cloudscape-design/components/collection-preferences';
 import Pagination from '@cloudscape-design/components/pagination';
 import Header from '@cloudscape-design/components/header';
@@ -27,6 +28,7 @@ interface AvailabilityTableProps<T extends RegionalAvailability> {
   regionalAvailability: T[];
   downloadUrls: ExportUrls;
   loading?: boolean;
+  extraFilteringProperties?: PropertyFilterProps.FilteringProperty[];
 }
 
 export default function AvailabilityTable<T extends RegionalAvailability>({
@@ -37,6 +39,7 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
   regionalAvailability,
   downloadUrls,
   loading = false,
+  extraFilteringProperties,
 }: AvailabilityTableProps<T>) {
   const [preferences, setPreferences] = useState<CollectionPreferencesProps.Preferences>({
     stickyColumns: { first: 1, last: 0 },
@@ -47,7 +50,7 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
     regions,
     nameCell: nameCell as (row: RegionalAvailability) => React.ReactNode,
   });
-  const filteringProperties = createFilteringProperties(regions);
+  const filteringProperties = createFilteringProperties(regions, extraFilteringProperties);
   const filteringFunction = useMemo(() => createFilteringFunction(regionalAvailability), [regionalAvailability]);
 
   const hasNesting = regionalAvailability.some(i => i.parentId !== null);
@@ -85,7 +88,21 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
   const regionFilteringOptions = regions.flatMap(r =>
     regionOptionValues.map(status => ({ propertyKey: `region:${r.Region}`, value: status })),
   );
-  const filteringOptions = [...propertyFilterProps.filteringOptions, ...regionFilteringOptions];
+
+  // Collect unique stack values for the stack filter
+  const stackFilteringOptions = useMemo(() => {
+    const stacks = new Set<string>();
+    for (const item of regionalAvailability) {
+      if (item.stacks) item.stacks.forEach(s => stacks.add(s));
+    }
+    return Array.from(stacks).map(s => ({ propertyKey: 'stack', value: s }));
+  }, [regionalAvailability]);
+
+  const filteringOptions = [
+    ...propertyFilterProps.filteringOptions,
+    ...regionFilteringOptions,
+    ...stackFilteringOptions,
+  ];
 
   return (
     <Table

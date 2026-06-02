@@ -19,6 +19,7 @@ export interface RegionalAvailability {
   homepageUrl?: string;
   regionDates?: Record<RegionCode, string>;
   regionalAvailability?: Record<RegionCode, AvailabilityStatus>;
+  stacks?: string[];
 }
 
 export interface ApiAvailability extends RegionalAvailability {

@@ -14,8 +14,27 @@ export interface CapabilityInsightsStackProps extends cdk.StackProps {
   deploymentAssetsBucketName?: string;
   sourceAccessPointArn?: string;
   sourceFolders?: string;
+  analysisStateMachineArn?: string;
+  cloudTrailAnalyzerLambdaName?: string;
+  cloudFormationAnalyzerLambdaName?: string;
+  configuredCloudTrailBucketName?: string;
 }
 
+export enum CapabilityInsightsStackOutputs {
+  WebsiteBucketName = 'WebsiteBucketName',
+  WebsiteBucketArn = 'WebsiteBucketArn',
+}
+
+/**
+ * Main Capability Insights application stack.
+ *
+ * Creates the website S3 bucket, private API Gateway, API Lambda, data fetch Lambda,
+ * VPC endpoints, and supporting resources. Accepts optional parameters from the
+ * Usage Analysis stack (AnalysisStateMachineArn, CloudTrailAnalyzerLambdaName)
+ * to enable the personalization features.
+ *
+ * Deployment order: Environment → Insights → Usage Analysis → Update Insights (with analysis params)
+ */
 export class CapabilityInsightsStack extends cdk.Stack {
   constructor(app: cdk.App, id: string, props?: CapabilityInsightsStackProps) {
     super(app, id, props);
@@ -59,6 +78,36 @@ export class CapabilityInsightsStack extends cdk.Stack {
       description: 'ARN of the S3 access point that provides the capability data source.',
       default: props?.sourceAccessPointArn,
     });
+    const analysisStateMachineArnParameter = new cdk.CfnParameter(this, 'AnalysisStateMachineArn', {
+      type: 'String',
+      description:
+        'ARN of the Usage Analysis Step Functions state machine. Leave empty if Usage Analysis stack is not yet deployed.',
+      default: props?.analysisStateMachineArn ?? '',
+    });
+
+    const hasAnalysisStateMachine = new cdk.CfnCondition(this, 'HasAnalysisStateMachine', {
+      expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(analysisStateMachineArnParameter.valueAsString, '')),
+    });
+
+    const cloudTrailAnalyzerLambdaNameParameter = new cdk.CfnParameter(this, 'CloudTrailAnalyzerLambdaName', {
+      type: 'String',
+      description: 'Name of the CloudTrail Analyzer Lambda function.',
+      default: props?.cloudTrailAnalyzerLambdaName ?? '',
+    });
+
+    const cloudformationAnalyzerLambdaNameParameter = new cdk.CfnParameter(this, 'CloudFormationAnalyzerLambdaName', {
+      type: 'String',
+      description: 'Name of the CloudFormation Analyzer Lambda function.',
+      default: props?.cloudFormationAnalyzerLambdaName ?? '',
+    });
+
+    const configuredCloudTrailBucketParameter = new cdk.CfnParameter(this, 'ConfiguredCloudTrailBucketName', {
+      type: 'String',
+      description:
+        'CloudTrail bucket configured at deploy time. Plumbed to the API Lambda so the UI can trigger analysis without re-supplying the bucket on every request.',
+      default: props?.configuredCloudTrailBucketName ?? '',
+    });
+
     const sourceFoldersParameter = new cdk.CfnParameter(this, 'SourceFolders', {
       type: 'String',
       description: 'Comma-separated list of folder names in the S3 access point to fetch data from.',
@@ -71,9 +120,8 @@ export class CapabilityInsightsStack extends cdk.Stack {
     // Website bucket name: "capability-insights-website-{account}-{region}"
     // Also referenced in: deployment/deploy.sh, deployment/dev.sh, README.md
     const websiteBucketResourceName = `capability-insights-website`;
-    const websiteBucketNameFn = cdk.Fn.sub('capability-insights-website-${AWS::AccountId}-${AWS::Region}');
     const websiteBucket = new s3.CfnBucket(this, websiteBucketResourceName, {
-      bucketName: websiteBucketNameFn,
+      bucketName: cdk.Fn.sub('capability-insights-website-${AWS::AccountId}-${AWS::Region}'),
       publicAccessBlockConfiguration: {
         blockPublicAcls: true,
         blockPublicPolicy: true,
@@ -155,6 +203,17 @@ export class CapabilityInsightsStack extends cdk.Stack {
       subnetIds: [privateSubnetIdParameter.valueAsString],
       securityGroupIds: [apigwSecurityGroup.ref],
       tags: [{ key: 'Name', value: `${prefix}LambdaVpcEndpoint` }],
+    });
+
+    // Allows the API Lambda to invoke Step Functions
+    new ec2.CfnVPCEndpoint(this, `${prefix}StepFunctionsVpcEndpoint`, {
+      vpcId: vpcIdParameter.valueAsString,
+      vpcEndpointType: 'Interface',
+      serviceName: cdk.Fn.sub('com.amazonaws.${AWS::Region}.states'),
+      privateDnsEnabled: true,
+      subnetIds: [privateSubnetIdParameter.valueAsString],
+      securityGroupIds: [apigwSecurityGroup.ref],
+      tags: [{ key: 'Name', value: `${prefix}StepFunctionsVpcEndpoint` }],
     });
 
     const apigw = new api.CfnRestApi(this, apigwName, {
@@ -331,6 +390,75 @@ export class CapabilityInsightsStack extends cdk.Stack {
             ],
           },
         },
+        {
+          policyName: 'StepFunctionsAccess',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                // StartExecution operates on the state machine ARN.
+                Effect: 'Allow',
+                Action: ['states:StartExecution'],
+                Resource: cdk.Fn.conditionIf(
+                  hasAnalysisStateMachine.logicalId,
+                  analysisStateMachineArnParameter.valueAsString,
+                  cdk.Fn.sub('arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:none'),
+                ),
+              },
+              {
+                // DescribeExecution operates on the execution ARN, which has
+                // a different format than the state machine ARN
+                // (`arn:...:execution:<state-machine-name>:<execution-id>`).
+                // Authorize any execution under the configured state machine.
+                Effect: 'Allow',
+                Action: ['states:DescribeExecution'],
+                Resource: cdk.Fn.conditionIf(
+                  hasAnalysisStateMachine.logicalId,
+                  cdk.Fn.sub(
+                    'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${StateMachineName}:*',
+                    {
+                      StateMachineName: cdk.Fn.select(
+                        6,
+                        cdk.Fn.split(':', analysisStateMachineArnParameter.valueAsString),
+                      ),
+                    },
+                  ),
+                  cdk.Fn.sub('arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:none:*'),
+                ),
+              },
+            ],
+          },
+        },
+        {
+          policyName: 'OrganizationsReadAccess',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: ['organizations:ListAccounts', 'organizations:DescribeOrganization'],
+                Resource: '*',
+              },
+            ],
+          },
+        },
+        {
+          // Reads pre-computed used-capabilities-*.json files written by the
+          // usage decorator Lambda, as well as api-config.json for route metadata.
+          policyName: 'S3WebsiteBucketRead',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: ['s3:GetObject'],
+                Resource: cdk.Fn.sub('${BucketArn}/data/json/*', {
+                  BucketArn: cdk.Fn.getAtt(websiteBucket.logicalId, 'Arn').toString(),
+                }),
+              },
+            ],
+          },
+        },
       ],
     });
     const apiLambdaFunction = new lambda.CfnFunction(this, apiLambdaName, {
@@ -351,6 +479,10 @@ export class CapabilityInsightsStack extends cdk.Stack {
         variables: {
           WEBSITE_BUCKET_NAME: cdk.Fn.ref(websiteBucket.logicalId),
           DATA_FETCH_LAMBDA_NAME: dataFetchLambdaName,
+          CLOUDTRAIL_ANALYZER_LAMBDA_NAME: cloudTrailAnalyzerLambdaNameParameter.valueAsString,
+          CLOUDFORMATION_ANALYZER_LAMBDA_NAME: cloudformationAnalyzerLambdaNameParameter.valueAsString,
+          ANALYSIS_STATE_MACHINE_ARN: analysisStateMachineArnParameter.valueAsString,
+          CONFIGURED_CLOUDTRAIL_BUCKET: configuredCloudTrailBucketParameter.valueAsString,
         },
       },
     });
@@ -517,9 +649,9 @@ export class CapabilityInsightsStack extends cdk.Stack {
               {
                 Effect: 'Allow',
                 Action: ['s3:PutObject'],
-                Resource: cdk.Fn.sub(
-                  'arn:${AWS::Partition}:s3:::capability-insights-website-${AWS::AccountId}-${AWS::Region}/*',
-                ),
+                Resource: cdk.Fn.sub('${BucketArn}/*', {
+                  BucketArn: cdk.Fn.getAtt(websiteBucket.logicalId, 'Arn').toString(),
+                }),
               },
             ],
           },
@@ -570,12 +702,20 @@ def lambda_handler(event, context):
     const writeConfigCustomResource = new cdk.CfnCustomResource(this, `${prefix}WriteConfigLambdaCustomResource`, {
       serviceToken: cdk.Fn.getAtt(writeConfigLambdaFunction.logicalId, 'Arn').toString(),
     });
-    writeConfigCustomResource.addPropertyOverride('Bucket', websiteBucketNameFn);
+    writeConfigCustomResource.addPropertyOverride('Bucket', cdk.Fn.ref(websiteBucket.logicalId));
     writeConfigCustomResource.addPropertyOverride(
       'ApiUrl',
       cdk.Fn.sub('https://${ApiId}.execute-api.${AWS::Region}.amazonaws.com/prod', {
         ApiId: apigw.attrRestApiId,
       }),
     );
+
+    // Outputs for cross-stack references
+    new cdk.CfnOutput(this, CapabilityInsightsStackOutputs.WebsiteBucketName, {
+      value: cdk.Fn.ref(websiteBucket.logicalId),
+    });
+    new cdk.CfnOutput(this, CapabilityInsightsStackOutputs.WebsiteBucketArn, {
+      value: cdk.Fn.getAtt(websiteBucket.logicalId, 'Arn').toString(),
+    });
   }
 }

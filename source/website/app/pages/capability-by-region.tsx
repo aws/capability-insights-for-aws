@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router';
 import ContentLayout from '@cloudscape-design/components/content-layout';
 import Header from '@cloudscape-design/components/header';
 import SpaceBetween from '@cloudscape-design/components/space-between';
@@ -9,9 +10,11 @@ import ColumnLayout from '@cloudscape-design/components/column-layout';
 import Link from '@cloudscape-design/components/link';
 import Popover from '@cloudscape-design/components/popover';
 import StatusIndicator from '@cloudscape-design/components/status-indicator';
+import Toggle from '@cloudscape-design/components/toggle';
 
 import { APP_NAME, PAGE_CAPABILITY_BY_REGION } from '~/constants/app';
 import type { Region } from '@capability-insights/shared/types/capability/region';
+import type { PropertyFilterProps } from '@cloudscape-design/components/property-filter';
 import { capabilityInsightsClient, DataFile } from '~/clients/capability-insights-client';
 import type { SyncMetadata } from '@capability-insights/shared/types/sync-metadata';
 import AvailabilityTable from '~/components/availability/availability-table';
@@ -41,6 +44,18 @@ export default function CapabilityByRegion() {
   const [loading, setLoading] = useState(true);
   const [syncMetadata, setSyncMetadata] = useState<SyncMetadata | null>(null);
 
+  // "My stuff" toggle state — persisted in URL search params
+  const [searchParams, setSearchParams] = useSearchParams();
+  const myStuffEnabled = searchParams.get('myStuff') === 'true';
+  const [myStuffLoading, setMyStuffLoading] = useState(false);
+  const [allProductRows, setAllProductRows] = useState<ProductAvailability[]>([]);
+  const [allApiRows, setAllApiRows] = useState<ApiAvailability[]>([]);
+  const [allCfnRows, setAllCfnRows] = useState<CfnAvailability[]>([]);
+  // Cache for personalized rows — avoids re-fetching on every toggle
+  const [usedProductRows, setUsedProductRows] = useState<ProductAvailability[] | null>(null);
+  const [usedApiRows, setUsedApiRows] = useState<ApiAvailability[] | null>(null);
+  const [usedCfnRows, setUsedCfnRows] = useState<CfnAvailability[] | null>(null);
+
   useEffect(() => {
     async function load() {
       const [r, p, a, c, syncMetadataResult] = await Promise.all([
@@ -51,14 +66,93 @@ export default function CapabilityByRegion() {
         capabilityInsightsClient.getLastSyncTime(),
       ]);
       setRegions(r);
-      setProductRows(fromProducts(p));
-      setApiRows(fromApiServices(a));
-      setCfnRows(fromCfnResources(c));
+      const pRows = fromProducts(p);
+      const aRows = fromApiServices(a);
+      const cRows = fromCfnResources(c);
+      setAllProductRows(pRows);
+      setAllApiRows(aRows);
+      setAllCfnRows(cRows);
       setSyncMetadata(syncMetadataResult);
       setLoading(false);
+
+      if (searchParams.get('myStuff') === 'true') {
+        setMyStuffLoading(true);
+        const usedCapabilities = await capabilityInsightsClient.getUsedCapabilities('account', 'combined');
+        if (usedCapabilities) {
+          const uP = fromProducts(usedCapabilities.products);
+          const uA = fromApiServices(usedCapabilities.apis);
+          const uC = fromCfnResources(usedCapabilities.cfnResources);
+          setUsedProductRows(uP);
+          setUsedApiRows(uA);
+          setUsedCfnRows(uC);
+          setProductRows(uP);
+          setApiRows(uA);
+          setCfnRows(uC);
+        } else {
+          setProductRows(pRows);
+          setApiRows(aRows);
+          setCfnRows(cRows);
+        }
+        setMyStuffLoading(false);
+      } else {
+        setProductRows(pRows);
+        setApiRows(aRows);
+        setCfnRows(cRows);
+      }
     }
     load();
   }, []);
+
+  const handleMyStuffToggle = useCallback(
+    async (checked: boolean) => {
+      setSearchParams(checked ? { myStuff: 'true' } : {}, { replace: true });
+      if (checked) {
+        // Use cached personalized rows if available
+        if (usedProductRows && usedApiRows && usedCfnRows) {
+          setProductRows(usedProductRows);
+          setApiRows(usedApiRows);
+          setCfnRows(usedCfnRows);
+          return;
+        }
+        setMyStuffLoading(true);
+        const usedCapabilities = await capabilityInsightsClient.getUsedCapabilities('account', 'combined');
+        if (usedCapabilities) {
+          const uP = fromProducts(usedCapabilities.products);
+          const uA = fromApiServices(usedCapabilities.apis);
+          const uC = fromCfnResources(usedCapabilities.cfnResources);
+          setUsedProductRows(uP);
+          setUsedApiRows(uA);
+          setUsedCfnRows(uC);
+          setProductRows(uP);
+          setApiRows(uA);
+          setCfnRows(uC);
+        }
+        setMyStuffLoading(false);
+      } else {
+        setProductRows(allProductRows);
+        setApiRows(allApiRows);
+        setCfnRows(allCfnRows);
+      }
+    },
+    [allProductRows, allApiRows, allCfnRows, usedProductRows, usedApiRows, usedCfnRows, setSearchParams],
+  );
+
+  const cfnStackFilterProperty = useMemo((): PropertyFilterProps.FilteringProperty[] => {
+    const allStacks = new Set<string>();
+    for (const row of cfnRows) {
+      if (row.stacks) row.stacks.forEach(s => allStacks.add(s));
+    }
+    if (allStacks.size === 0) return [];
+    return [
+      {
+        key: 'stack',
+        propertyLabel: 'Stack',
+        groupValuesLabel: 'Stack values',
+        operators: [{ operator: '=', tokenType: 'enum' }, { operator: '!=', tokenType: 'enum' }, ':', '!:'],
+        group: 'properties',
+      },
+    ];
+  }, [cfnRows]);
 
   return (
     <ContentLayout
@@ -67,48 +161,53 @@ export default function CapabilityByRegion() {
           variant="h1"
           description="Browse regional availability data for AWS services, API operations, and CloudFormation resource types."
           actions={
-            syncMetadata?.errors?.length ? (
-              <Popover
-                dismissButton={false}
-                position="bottom"
-                size="large"
-                content={
-                  <SpaceBetween size="xs">
-                    {syncMetadata.errors.map((err, i) => (
-                      <StatusIndicator key={i} type="error">
-                        {err}
-                      </StatusIndicator>
-                    ))}
-                    <Link href="/settings" variant="primary" fontSize="body-s">
-                      Go to settings
-                    </Link>
-                  </SpaceBetween>
-                }
-              >
-                <StatusIndicator type="error">
-                  Sync completed with {syncMetadata.errors.length} error(s)
-                </StatusIndicator>
-              </Popover>
-            ) : syncMetadata?.lastSyncTime ? (
-              <Popover
-                dismissButton={false}
-                position="bottom"
-                size="small"
-                content={
-                  <SpaceBetween size="xs">
-                    <StatusIndicator type="success">{formatTimestamp(syncMetadata.lastSyncTime)}</StatusIndicator>
-                    <Box variant="small" color="text-body-secondary">
-                      Data refreshes automatically every 24 hours.
-                    </Box>
-                    <Link href="/settings" variant="primary" fontSize="body-s">
-                      Sync manually
-                    </Link>
-                  </SpaceBetween>
-                }
-              >
-                Last sync: {formatTimestamp(syncMetadata.lastSyncTime)}
-              </Popover>
-            ) : undefined
+            <SpaceBetween direction="horizontal" size="m" alignItems="center">
+              <Toggle onChange={({ detail }) => handleMyStuffToggle(detail.checked)} checked={myStuffEnabled}>
+                My stuff
+              </Toggle>
+              {syncMetadata?.errors?.length ? (
+                <Popover
+                  dismissButton={false}
+                  position="bottom"
+                  size="large"
+                  content={
+                    <SpaceBetween size="xs">
+                      {syncMetadata.errors.map((err, i) => (
+                        <StatusIndicator key={i} type="error">
+                          {err}
+                        </StatusIndicator>
+                      ))}
+                      <Link href="/settings" variant="primary" fontSize="body-s">
+                        Go to settings
+                      </Link>
+                    </SpaceBetween>
+                  }
+                >
+                  <StatusIndicator type="error">
+                    Sync completed with {syncMetadata.errors.length} error(s)
+                  </StatusIndicator>
+                </Popover>
+              ) : syncMetadata?.lastSyncTime ? (
+                <Popover
+                  dismissButton={false}
+                  position="bottom"
+                  size="small"
+                  content={
+                    <SpaceBetween size="xs">
+                      <StatusIndicator type="success">{formatTimestamp(syncMetadata.lastSyncTime)}</StatusIndicator>
+                      <Box variant="small" color="text-body-secondary">
+                        Data refreshes automatically every 24 hours.
+                      </Box>
+                      <Link href="/settings" variant="primary" fontSize="body-s">
+                        Sync manually
+                      </Link>
+                    </SpaceBetween>
+                  }
+                >
+                  Last sync: {formatTimestamp(syncMetadata.lastSyncTime)}
+                </Popover>
+              ) : undefined}
+            </SpaceBetween>
           }
         >
           {PAGE_CAPABILITY_BY_REGION}
@@ -165,7 +264,7 @@ export default function CapabilityByRegion() {
                       <RegionalAvailabilityTypeBadge type={row.regionalAvailabilityType} />
                     </SpaceBetween>
                   )}
-                  loading={loading}
+                  loading={loading || myStuffLoading}
                 />
               ),
             },
@@ -191,7 +290,7 @@ export default function CapabilityByRegion() {
                       <RegionalAvailabilityTypeBadge type={row.regionalAvailabilityType} />
                     </SpaceBetween>
                   )}
-                  loading={loading}
+                  loading={loading || myStuffLoading}
                 />
               ),
             },
@@ -205,6 +304,7 @@ export default function CapabilityByRegion() {
                   regions={regions}
                   regionalAvailability={cfnRows}
                   downloadUrls={capabilityInsightsClient.exportUrls(DataFile.CFN_RESOURCES)}
+                  extraFilteringProperties={cfnStackFilterProperty}
                   nameCell={row => (
                     <SpaceBetween direction="horizontal" size="xs">
                       {row.homepageUrl ? (
@@ -217,7 +317,7 @@ export default function CapabilityByRegion() {
                       <RegionalAvailabilityTypeBadge type={row.regionalAvailabilityType} />
                     </SpaceBetween>
                   )}
-                  loading={loading}
+                  loading={loading || myStuffLoading}
                 />
               ),
             },

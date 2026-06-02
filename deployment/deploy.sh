@@ -19,6 +19,9 @@ Deploy options (pass as flags or omit to be prompted):
   --deployment-assets-bucket-name <name> S3 bucket for deployment assets
   --source-access-point-arn <arn>        S3 access point ARN for capability data source
   --source-folders <folders>             Comma-separated list of source folders (default: public)
+  --enable-usage-analysis                Deploy the Usage Analysis stack
+  --cloudtrail-bucket <name>             S3 bucket containing CloudTrail logs (for usage analysis,
+                                         auto-discovered from your account's CloudTrail trails if omitted)
   -y, --yes                              Skip confirmation prompts
 
 Examples:
@@ -56,7 +59,7 @@ prompt_if_empty() {
 }
 
 cmd_deploy() {
-  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders="" auto_approve=""
+  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders="" cloudtrail_bucket="" enable_usage_analysis="" auto_approve=""
 
   while [[ $# -gt 0 ]]; do
     case $1 in
@@ -66,6 +69,8 @@ cmd_deploy() {
       --deployment-assets-bucket-name)   deployment_assets_bucket_name="$2"; shift 2 ;;
       --source-access-point-arn)         source_access_point_arn="$2"; shift 2 ;;
       --source-folders)                  source_folders="$2"; shift 2 ;;
+      --cloudtrail-bucket)               cloudtrail_bucket="$2"; shift 2 ;;
+      --enable-usage-analysis)           enable_usage_analysis="true"; shift ;;
       -y|--yes)                          auto_approve="true"; shift ;;
       *) echo "Unknown option: $1"; usage ;;
     esac
@@ -90,6 +95,28 @@ cmd_deploy() {
       source_folders="public"
     fi
   done
+
+  # Auto-discover a CloudTrail bucket when --enable-usage-analysis is set
+  # but --cloudtrail-bucket was not. Queries CloudTrail directly for the
+  # account's configured trails and pulls the S3 bucket from the matching
+  # one. If multiple match, list and prompt; if none, prompt with a hint.
+  if [[ "$enable_usage_analysis" == "true" && -z "$cloudtrail_bucket" ]]; then
+    local discovered_buckets
+    discovered_buckets=$(aws cloudtrail describe-trails --query 'trailList[].S3BucketName' --output text 2>/dev/null | tr '\t' '\n' | grep -v '^$' | sort -u || true)
+    local discovered_count
+    discovered_count=$(printf '%s\n' "$discovered_buckets" | grep -c . || true)
+    if [[ "$discovered_count" == "1" ]]; then
+      cloudtrail_bucket="$discovered_buckets"
+      echo "Auto-discovered CloudTrail bucket: $cloudtrail_bucket"
+    elif [[ "$discovered_count" -gt 1 ]]; then
+      echo "Multiple CloudTrail buckets found:"
+      printf '  %s\n' $discovered_buckets
+      prompt_if_empty cloudtrail_bucket "CloudTrailBucket (paste one of the above)"
+    else
+      echo "No CloudTrail trails found in this account/region. Configure CloudTrail to log to S3, or pass --cloudtrail-bucket explicitly."
+      prompt_if_empty cloudtrail_bucket "CloudTrailBucket"
+    fi
+  fi
 
   echo ""
   echo "Deploying to account $AWS_ACCOUNT in $AWS_REGION"
@@ -150,7 +177,83 @@ cmd_deploy() {
   echo "── Uploading website assets ──"
   get_account_and_region
   local website_bucket="capability-insights-website-${ACCOUNT_ID}-${REGION}"
+  local website_bucket_arn="arn:aws:s3:::${website_bucket}"
   aws s3 sync "$SCRIPT_DIR/dist/website/" "s3://$website_bucket/"
+
+  echo "── Deploying Usage Analysis stack ──"
+  if [[ "$enable_usage_analysis" == "true" ]]; then
+    aws cloudformation deploy \
+      --template-file "$SCRIPT_DIR/dist/template/usage-analysis.template.json" \
+      --stack-name CapabilityInsightsUsageAnalysis \
+      --parameter-overrides \
+        WebsiteBucketName="$website_bucket" \
+        WebsiteBucketArn="$website_bucket_arn" \
+        DeploymentAssetsBucketName="$deployment_assets_bucket_name" \
+        LambdaCodeZipPath="$lambda_key" \
+        CloudTrailBucketName="${cloudtrail_bucket:-}" \
+      --capabilities CAPABILITY_NAMED_IAM \
+      --no-cli-pager || true
+    echo "  ✓ Usage Analysis stack deployed."
+
+    # Get outputs from Usage Analysis stack
+    local analysis_state_machine_arn cloudtrail_analyzer_lambda_name cloudformation_analyzer_lambda_name usage_decorator_lambda_name
+    analysis_state_machine_arn=$(aws cloudformation describe-stacks \
+      --stack-name CapabilityInsightsUsageAnalysis \
+      --query "Stacks[0].Outputs[?OutputKey=='AnalysisStateMachineArn'].OutputValue" --output text 2>/dev/null || echo "")
+    cloudtrail_analyzer_lambda_name=$(aws cloudformation describe-stacks \
+      --stack-name CapabilityInsightsUsageAnalysis \
+      --query "Stacks[0].Outputs[?OutputKey=='CloudTrailAnalyzerLambdaName'].OutputValue" --output text 2>/dev/null || echo "")
+    cloudformation_analyzer_lambda_name=$(aws cloudformation describe-stacks \
+      --stack-name CapabilityInsightsUsageAnalysis \
+      --query "Stacks[0].Outputs[?OutputKey=='CloudFormationAnalyzerLambdaName'].OutputValue" --output text 2>/dev/null || echo "")
+    usage_decorator_lambda_name=$(aws cloudformation describe-stacks \
+      --stack-name CapabilityInsightsUsageAnalysis \
+      --query "Stacks[0].Outputs[?OutputKey=='UsageDecoratorLambdaName'].OutputValue" --output text 2>/dev/null || echo "")
+
+    # Force Lambda code update (CloudFormation may skip if template is unchanged)
+    if [[ -n "$cloudtrail_analyzer_lambda_name" ]]; then
+      aws lambda update-function-code \
+        --function-name "$cloudtrail_analyzer_lambda_name" \
+        --s3-bucket "$deployment_assets_bucket_name" \
+        --s3-key "$lambda_key" > /dev/null 2>&1 || true
+    fi
+    if [[ -n "$cloudformation_analyzer_lambda_name" ]]; then
+      aws lambda update-function-code \
+        --function-name "$cloudformation_analyzer_lambda_name" \
+        --s3-bucket "$deployment_assets_bucket_name" \
+        --s3-key "$lambda_key" > /dev/null 2>&1 || true
+    fi
+    if [[ -n "$usage_decorator_lambda_name" ]]; then
+      aws lambda update-function-code \
+        --function-name "$usage_decorator_lambda_name" \
+        --s3-bucket "$deployment_assets_bucket_name" \
+        --s3-key "$lambda_key" > /dev/null 2>&1 || true
+    fi
+
+    if [[ -n "$analysis_state_machine_arn" && -n "$cloudtrail_analyzer_lambda_name" && -n "$cloudformation_analyzer_lambda_name" ]]; then
+      echo "── Updating Insights stack with Usage Analysis outputs ──"
+      aws cloudformation deploy \
+        --template-file "$SCRIPT_DIR/dist/template/capability-insights.template.json" \
+        --stack-name CapabilityInsightsForAWS \
+        --parameter-overrides \
+          PrivateVpcId="$private_vpc_id" \
+          BackendSubnetId="$backend_subnet_id" \
+          ApiAccessSubnetId="$api_access_subnet_id" \
+          DeploymentAssetsBucketName="$deployment_assets_bucket_name" \
+          DeploymentAssetsBucketApiLambdaFunctionCodeZipPath="$lambda_key" \
+          SourceAccessPointArn="$source_access_point_arn" \
+          SourceFolders="$source_folders" \
+          AnalysisStateMachineArn="$analysis_state_machine_arn" \
+          CloudTrailAnalyzerLambdaName="$cloudtrail_analyzer_lambda_name" \
+          CloudFormationAnalyzerLambdaName="$cloudformation_analyzer_lambda_name" \
+          ConfiguredCloudTrailBucketName="$cloudtrail_bucket" \
+        --capabilities CAPABILITY_NAMED_IAM \
+        --no-cli-pager || true
+      echo "  ✓ Insights stack updated with analysis integration."
+    fi
+  else
+    echo "  Skipped (pass --enable-usage-analysis to deploy)."
+  fi
 
   echo "── Syncing capability data ──"
   aws lambda invoke --function-name CapabilityInsightsDataFetchLambda --invocation-type Event /dev/null > /dev/null 2>&1
@@ -169,13 +272,18 @@ cmd_teardown() {
   local website_bucket="capability-insights-website-${ACCOUNT_ID}-${REGION}"
 
   if [[ "$AUTO_APPROVE" != "true" ]]; then
-    echo "This will delete the CapabilityInsightsForAWS stack and empty the website bucket."
+    echo "This will delete the CapabilityInsightsForAWS and CapabilityInsightsUsageAnalysis stacks and empty the website bucket."
     read -rp "Continue? (y/N): " confirm
     [[ "$confirm" =~ ^[Yy]$ ]] || exit 0
   fi
 
   echo "── Emptying website bucket ──"
   aws s3 rm "s3://$website_bucket" --recursive || true
+
+  echo "── Destroying Usage Analysis stack ──"
+  aws cloudformation delete-stack --stack-name CapabilityInsightsUsageAnalysis 2>/dev/null || true
+  aws cloudformation wait stack-delete-complete --stack-name CapabilityInsightsUsageAnalysis 2>/dev/null || true
+  echo "  ✓ Usage Analysis stack deleted."
 
   echo "── Destroying stack (this will likely take ~15 minutes) ──"
   aws cloudformation delete-stack --stack-name CapabilityInsightsForAWS
