@@ -38,7 +38,11 @@ The solution deploys entirely within your VPC so that all data remains within yo
 
 ![High-level architecture](docs/images/high-level-architecture.png)
 
-The solution deploys a static website, REST API, and Lambda functions into your VPC. Personalization is provided by an opt-in second stack that adds a Step Functions state machine and analyzer Lambdas that read your account's CloudTrail logs and CloudFormation stacks. For a detailed breakdown of all resources, see [Architecture](#architecture).
+The solution deploys a static website, REST API, and Lambda functions into your VPC. Personalization is provided by an opt-in second stack that adds a Step Functions state machine and analyzer Lambdas that read your account's CloudTrail logs and CloudFormation stacks.
+
+![Usage Analysis architecture](docs/images/personalization-architecture.png)
+
+For a detailed breakdown of all resources, see [Architecture](#architecture).
 
 ## Installation
 
@@ -208,7 +212,7 @@ Since the website is not publicly accessible, you need a way to reach it from wi
 
 ## User Guide
 
-Once deployed, the dashboard provides a searchable view of AWS service, API, and CloudFormation resource availability across regions. This section walks through the main features.
+Once deployed, the dashboard provides a searchable view of AWS service, API, and CloudFormation resource availability across regions, plus an opt-in personalization layer that filters everything to what your account actually uses. This section walks through the main features.
 
 ### Browsing Services and Features
 
@@ -236,7 +240,7 @@ Click the Export button to download the current view as JSON or CSV. This is use
 
 ### Navigation and Settings
 
-Open the side navigation to switch between the Capability by Region dashboard and Settings. The Settings page shows the last sync time and lets you trigger a manual data refresh.
+Open the side navigation to switch between the Capability by Region dashboard and Settings. The Settings page lets you trigger a manual data refresh and, when personalization is enabled, run usage analysis on demand.
 
 ![Navigation](docs/images/user-guide-navigation.png)
 
@@ -244,11 +248,17 @@ Open the side navigation to switch between the Capability by Region dashboard an
 
 ### Personalizing the dashboard (opt-in)
 
-If you deployed with `--enable-usage-analysis`, the dashboard offers a **My Stuff** toggle that filters services, APIs, and CloudFormation resources to only what's actually used in your account. The data is produced by analyzers that read your CloudTrail logs and active CloudFormation stacks, then written back to the website bucket as a personalized data set.
+If you deployed with `--enable-usage-analysis`, the dashboard offers a **My stuff** toggle in the Capability by Region page header. With it on, the table filters down to only the services, APIs, and CloudFormation resources actually used in your account.
 
-The analysis runs on a daily schedule. You can also trigger it on demand from the Settings page using the **Run usage analysis** button. The page shows progress and the result counts when the run completes; refresh the dashboard afterwards to see the updated personalization.
+![My stuff toggle](docs/images/user-guide-personalization-toggle.png)
 
-## Architecture
+The CloudFormation tab also gains a **Stack** filter, letting you narrow resources to those deployed by specific CloudFormation stacks in your account.
+
+![CFN Stack filter](docs/images/user-guide-cfn-stack-filter.png)
+
+The personalized data is produced by analyzers that read your CloudTrail logs and active CloudFormation stacks, then written back to the website bucket as a personalized data set. The analysis runs on a daily schedule. You can also trigger it on demand from the Settings page using the **Run usage analysis** button. The page shows progress and result counts when the run completes; refresh the dashboard afterwards to see the updated personalization.
+
+![Run usage analysis](docs/images/user-guide-run-analysis.png)
 
 This repository provides two CloudFormation stacks:
 
