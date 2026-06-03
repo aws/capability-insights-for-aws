@@ -260,7 +260,9 @@ The personalized data is produced by analyzers that read your CloudTrail logs an
 
 ![Run usage analysis](docs/images/user-guide-run-analysis.png)
 
-This repository provides two CloudFormation stacks:
+## Architecture
+
+This repository provides three CloudFormation stacks:
 
 ### Capability Insights Stack
 
