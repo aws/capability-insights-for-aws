@@ -8,8 +8,8 @@ import type { Product } from '@capability-insights/shared/types/capability/produ
 import type { UsedCapabilities } from '@capability-insights/shared/types/used-capabilities';
 import { CLOUDTRAIL_SERVICE_ALIASES } from './constants/cloudtrail-service-aliases';
 import { EnvironmentKey, getOptionalEnv } from './constants/environment';
-import { Scope } from './constants/scope';
-import { UsageFilter, VALID_USAGE_FILTERS } from './constants/usage-filter';
+import { Scope } from '@capability-insights/shared/types/scope';
+import { UsageFilter, VALID_USAGE_FILTERS } from '@capability-insights/shared/types/usage-filter';
 import { S3BucketClient } from './services/s3-client';
 import type { CloudFormationUsage, CloudTrailUsage } from './types/usage';
 import { logger } from './util/logger';

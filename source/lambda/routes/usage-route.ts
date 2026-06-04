@@ -1,7 +1,7 @@
 import { S3BucketClient } from '../services/s3-client';
 import { EnvironmentKey, getEnv } from '../constants/environment';
-import { Scope, VALID_SCOPES } from '../constants/scope';
-import { UsageFilter, VALID_USAGE_FILTERS } from '../constants/usage-filter';
+import { Scope, VALID_SCOPES } from '@capability-insights/shared/types/scope';
+import { UsageFilter, VALID_USAGE_FILTERS } from '@capability-insights/shared/types/usage-filter';
 import { StatusCode } from '../constants/status-codes';
 import { logger } from '../util/logger';
 import type { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';

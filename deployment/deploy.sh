@@ -22,6 +22,8 @@ Deploy options (pass as flags or omit to be prompted):
   --enable-usage-analysis                Deploy the Usage Analysis stack
   --cloudtrail-bucket <name>             S3 bucket containing CloudTrail logs (for usage analysis,
                                          auto-discovered from your account's CloudTrail trails if omitted)
+  --enable-policy-enforcer               Deploy the Policy Enforcer stack (regional governance
+                                         policies generated from the catalog)
   -y, --yes                              Skip confirmation prompts
 
 Examples:
@@ -59,7 +61,7 @@ prompt_if_empty() {
 }
 
 cmd_deploy() {
-  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders="" cloudtrail_bucket="" enable_usage_analysis="" auto_approve=""
+  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders="" cloudtrail_bucket="" enable_usage_analysis="" enable_policy_enforcer="" auto_approve=""
 
   while [[ $# -gt 0 ]]; do
     case $1 in
@@ -71,6 +73,7 @@ cmd_deploy() {
       --source-folders)                  source_folders="$2"; shift 2 ;;
       --cloudtrail-bucket)               cloudtrail_bucket="$2"; shift 2 ;;
       --enable-usage-analysis)           enable_usage_analysis="true"; shift ;;
+      --enable-policy-enforcer)          enable_policy_enforcer="true"; shift ;;
       -y|--yes)                          auto_approve="true"; shift ;;
       *) echo "Unknown option: $1"; usage ;;
     esac
@@ -255,6 +258,64 @@ cmd_deploy() {
     echo "  Skipped (pass --enable-usage-analysis to deploy)."
   fi
 
+  echo "── Deploying Policy Enforcer stack ──"
+  local policy_table_name=""
+  if [[ "$enable_policy_enforcer" == "true" ]]; then
+    aws cloudformation deploy \
+      --template-file "$SCRIPT_DIR/dist/template/policy-enforcer.template.json" \
+      --stack-name CapabilityInsightsPolicyEnforcer \
+      --parameter-overrides \
+        DeploymentAssetsBucketName="$deployment_assets_bucket_name" \
+        LambdaCodeZipPath="$lambda_key" \
+      --capabilities CAPABILITY_NAMED_IAM \
+      --no-cli-pager || true
+    echo "  ✓ Policy Enforcer stack deployed."
+
+    policy_table_name=$(aws cloudformation describe-stacks \
+      --stack-name CapabilityInsightsPolicyEnforcer \
+      --query "Stacks[0].Outputs[?OutputKey=='PolicyTableName'].OutputValue" --output text 2>/dev/null || echo "")
+    local iam_helper_lambda_name
+    iam_helper_lambda_name=$(aws cloudformation describe-stacks \
+      --stack-name CapabilityInsightsPolicyEnforcer \
+      --query "Stacks[0].Outputs[?OutputKey=='IamHelperLambdaName'].OutputValue" --output text 2>/dev/null || echo "")
+
+    # Force-update the helper Lambda's code (CFN may skip if template is unchanged)
+    if [[ -n "$iam_helper_lambda_name" ]]; then
+      aws lambda update-function-code \
+        --function-name "$iam_helper_lambda_name" \
+        --s3-bucket "$deployment_assets_bucket_name" \
+        --s3-key "$lambda_key" > /dev/null 2>&1 || true
+    fi
+
+    if [[ -n "$policy_table_name" ]]; then
+      echo "── Updating Insights stack with Policy Enforcer outputs ──"
+      # Re-run the main stack deploy with PolicyTableName plus any
+      # already-discovered Usage Analysis outputs so we don't lose them.
+      aws cloudformation deploy \
+        --template-file "$SCRIPT_DIR/dist/template/capability-insights.template.json" \
+        --stack-name CapabilityInsightsForAWS \
+        --parameter-overrides \
+          PrivateVpcId="$private_vpc_id" \
+          BackendSubnetId="$backend_subnet_id" \
+          ApiAccessSubnetId="$api_access_subnet_id" \
+          DeploymentAssetsBucketName="$deployment_assets_bucket_name" \
+          DeploymentAssetsBucketApiLambdaFunctionCodeZipPath="$lambda_key" \
+          SourceAccessPointArn="$source_access_point_arn" \
+          SourceFolders="$source_folders" \
+          AnalysisStateMachineArn="${analysis_state_machine_arn:-}" \
+          CloudTrailAnalyzerLambdaName="${cloudtrail_analyzer_lambda_name:-}" \
+          CloudFormationAnalyzerLambdaName="${cloudformation_analyzer_lambda_name:-}" \
+          ConfiguredCloudTrailBucketName="${cloudtrail_bucket:-}" \
+          PolicyTableName="$policy_table_name" \
+          IamHelperLambdaName="${iam_helper_lambda_name:-}" \
+        --capabilities CAPABILITY_NAMED_IAM \
+        --no-cli-pager || true
+      echo "  ✓ Insights stack updated with Policy Enforcer integration."
+    fi
+  else
+    echo "  Skipped (pass --enable-policy-enforcer to deploy)."
+  fi
+
   echo "── Syncing capability data ──"
   aws lambda invoke --function-name CapabilityInsightsDataFetchLambda --invocation-type Event /dev/null > /dev/null 2>&1
 
@@ -272,13 +333,18 @@ cmd_teardown() {
   local website_bucket="capability-insights-website-${ACCOUNT_ID}-${REGION}"
 
   if [[ "$AUTO_APPROVE" != "true" ]]; then
-    echo "This will delete the CapabilityInsightsForAWS and CapabilityInsightsUsageAnalysis stacks and empty the website bucket."
+    echo "This will delete the CapabilityInsightsForAWS, CapabilityInsightsUsageAnalysis, and CapabilityInsightsPolicyEnforcer stacks and empty the website bucket."
     read -rp "Continue? (y/N): " confirm
     [[ "$confirm" =~ ^[Yy]$ ]] || exit 0
   fi
 
   echo "── Emptying website bucket ──"
   aws s3 rm "s3://$website_bucket" --recursive || true
+
+  echo "── Destroying Policy Enforcer stack ──"
+  aws cloudformation delete-stack --stack-name CapabilityInsightsPolicyEnforcer 2>/dev/null || true
+  aws cloudformation wait stack-delete-complete --stack-name CapabilityInsightsPolicyEnforcer 2>/dev/null || true
+  echo "  ✓ Policy Enforcer stack deleted."
 
   echo "── Destroying Usage Analysis stack ──"
   aws cloudformation delete-stack --stack-name CapabilityInsightsUsageAnalysis 2>/dev/null || true

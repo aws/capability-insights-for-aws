@@ -4,8 +4,8 @@ import { OrganizationsClient, ListAccountsCommand } from '@aws-sdk/client-organi
 import { StatusCode } from '../constants/status-codes';
 import { HttpMethod } from '../constants/http-methods';
 import { EnvironmentKey, getEnv, getOptionalEnv } from '../constants/environment';
-import { Scope } from '../constants/scope';
-import { AnalyzerType, ExecutionStatus } from '../constants/analysis';
+import { Scope } from '@capability-insights/shared/types/scope';
+import { AnalyzerType, ExecutionStatus } from '@capability-insights/shared/types/analysis';
 import { logger } from '../util/logger';
 
 interface CloudTrailConfig {

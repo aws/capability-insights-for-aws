@@ -45,6 +45,18 @@ export class CapabilityInsightsSampleEnvironmentStack extends cdk.Stack {
       vpcId: this.vpc.attrVpcId,
       tags: [{ key: 'Name', value: privateSubnetName }],
     });
+    // Explicit private route table. Without this, the subnet falls through
+    // to the VPC main route table, which has no S3 gateway endpoint route,
+    // so Lambdas in the private subnet can't reach S3.
+    const privateRouteTableName = `${vpcName}PrivateRouteTable`;
+    const privateRouteTable = new ec2.CfnRouteTable(this, privateRouteTableName, {
+      vpcId: this.vpc.attrVpcId,
+      tags: [{ key: 'Name', value: privateRouteTableName }],
+    });
+    new ec2.CfnSubnetRouteTableAssociation(this, `${privateSubnetName}RouteTableAssociation`, {
+      subnetId: this.privateSubnet.attrSubnetId,
+      routeTableId: privateRouteTable.attrRouteTableId,
+    });
 
     // What makes a subnet "public" is the presence of an Internet Gateway
     const internetGatewayName = `${vpcName}IGW`;
@@ -85,7 +97,7 @@ export class CapabilityInsightsSampleEnvironmentStack extends cdk.Stack {
       vpcId: this.vpc.attrVpcId,
       vpcEndpointType: 'Gateway',
       serviceName: cdk.Fn.sub('com.amazonaws.${AWS::Region}.s3'),
-      routeTableIds: [publicRouteTable.attrRouteTableId],
+      routeTableIds: [publicRouteTable.attrRouteTableId, privateRouteTable.attrRouteTableId],
       policyDocument: {
         Version: '2012-10-17',
         Statement: [
@@ -100,6 +112,18 @@ export class CapabilityInsightsSampleEnvironmentStack extends cdk.Stack {
         ],
       },
       tags: [{ key: 'Name', value: vpcS3EndpointName }],
+    });
+
+    // VPC Gateway Endpoint to DynamoDB — used by the Policy Enforcer feature
+    // so the API Lambda (in the private subnet without internet) can reach
+    // the PolicyConfiguration table. Free of charge.
+    const vpcDynamoEndpointName = `${vpcName}DynamoDbEndpoint`;
+    new ec2.CfnVPCEndpoint(this, vpcDynamoEndpointName, {
+      vpcId: this.vpc.attrVpcId,
+      vpcEndpointType: 'Gateway',
+      serviceName: cdk.Fn.sub('com.amazonaws.${AWS::Region}.dynamodb'),
+      routeTableIds: [publicRouteTable.attrRouteTableId, privateRouteTable.attrRouteTableId],
+      tags: [{ key: 'Name', value: vpcDynamoEndpointName }],
     });
 
     const keypairName = props?.ec2KeyPair;

@@ -1,0 +1,189 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CloudFormation template matches snapshot 1`] = `
+{
+  "Outputs": {
+    "IamHelperLambdaName": {
+      "Description": "Name of the out-of-VPC IAM Helper Lambda the API Lambda must invoke for IAM policy mutations.",
+      "Export": {
+        "Name": "CapabilityInsightsIamHelperLambdaName",
+      },
+      "Value": "CapabilityInsightsPolicyEnforcerIamHelper",
+    },
+    "PolicyTableArn": {
+      "Description": "ARN of the Policy_Configuration DynamoDB table.",
+      "Export": {
+        "Name": "CapabilityInsightsPolicyTableArn",
+      },
+      "Value": {
+        "Fn::GetAtt": [
+          "PolicyConfigurationTable",
+          "Arn",
+        ],
+      },
+    },
+    "PolicyTableName": {
+      "Description": "Name of the Policy_Configuration DynamoDB table.",
+      "Export": {
+        "Name": "CapabilityInsightsPolicyTableName",
+      },
+      "Value": "CapabilityInsightsPolicyConfiguration",
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+    "DeploymentAssetsBucketName": {
+      "Description": "Name of S3 bucket where deployment assets (Lambda code zip) are located.",
+      "Type": "String",
+    },
+    "LambdaCodeZipPath": {
+      "Default": "lambdaAssets.zip",
+      "Description": "Path in the deployment assets bucket where the Lambda code zip is located.",
+      "Type": "String",
+    },
+  },
+  "Resources": {
+    "CapabilityInsightsPolicyEnforcerIamHelper": {
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "DeploymentAssetsBucketName",
+          },
+          "S3Key": {
+            "Ref": "LambdaCodeZipPath",
+          },
+        },
+        "FunctionName": "CapabilityInsightsPolicyEnforcerIamHelper",
+        "Handler": "policy-enforcer-iam-helper.handler",
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsPolicyEnforcerIamHelperRole",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 60,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CapabilityInsightsPolicyEnforcerIamHelperRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for the Policy Enforcer IAM Helper Lambda. Scoped to PolicyEnforcer-* managed policies only.",
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          },
+        ],
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "iam:CreatePolicy",
+                    "iam:CreatePolicyVersion",
+                    "iam:DeletePolicy",
+                    "iam:DeletePolicyVersion",
+                    "iam:GetPolicy",
+                    "iam:GetPolicyVersion",
+                    "iam:ListPolicyVersions",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": "arn:\${AWS::Partition}:iam::\${AWS::AccountId}:policy/PolicyEnforcer-*",
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "PolicyEnforcerIamManagement",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsPolicyEnforcerIamHelperRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "PolicyConfigurationTable": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "accountId",
+            "AttributeType": "S",
+          },
+          {
+            "AttributeName": "policyName",
+            "AttributeType": "S",
+          },
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "KeySchema": [
+          {
+            "AttributeName": "accountId",
+            "KeyType": "HASH",
+          },
+          {
+            "AttributeName": "policyName",
+            "KeyType": "RANGE",
+          },
+        ],
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": true,
+        },
+        "SSESpecification": {
+          "SSEEnabled": true,
+        },
+        "TableName": "CapabilityInsightsPolicyConfiguration",
+      },
+      "Type": "AWS::DynamoDB::Table",
+      "UpdateReplacePolicy": "Delete",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;

@@ -24,6 +24,19 @@ export const EnvironmentKey = {
    * to only the features directly observed in usage data.
    */
   INCLUDE_ALL_FEATURES_PER_SERVICE: 'INCLUDE_ALL_FEATURES_PER_SERVICE',
+  /**
+   * DynamoDB table name for the Policy Enforcer's `PolicyConfiguration`
+   * records. Set by the `CapabilityInsightsPolicyEnforcerStack` when the
+   * `--enable-policy-enforcer` deploy flag is used. Absent otherwise.
+   */
+  POLICY_TABLE_NAME: 'POLICY_TABLE_NAME',
+  /**
+   * Name of the out-of-VPC IAM Helper Lambda that performs `iam:*Policy*`
+   * mutations on behalf of the in-VPC API Lambda. IAM has no VPC endpoint,
+   * so the helper exists outside the VPC and is invoked over the Lambda VPC
+   * endpoint. Set by the Policy Enforcer stack.
+   */
+  IAM_HELPER_LAMBDA_NAME: 'IAM_HELPER_LAMBDA_NAME',
 } as const;
 
 export type EnvironmentKey = (typeof EnvironmentKey)[keyof typeof EnvironmentKey];
