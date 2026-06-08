@@ -7,6 +7,7 @@ import { ParamRouter } from './util/router';
 import { syncCapabilityDataRoute } from './routes/sync-capability-data-route';
 import { handleAnalyze } from './routes/analyze-route';
 import { getUsedCapabilities } from './routes/usage-route';
+import { getFeaturesRoute } from './routes/features-route';
 import {
   createPolicyRoute,
   listPoliciesRoute,
@@ -15,6 +16,7 @@ import {
   deletePolicyRoute,
   refreshPolicyRoute,
   previewPolicyRoute,
+  refreshAllPoliciesRoute,
 } from './routes/policy-routes';
 
 const routes: Map<string, RouteHandler> = new Map();
@@ -31,10 +33,14 @@ registerRoute(HttpMethod.POST, '/analysis', handleAnalyze);
 registerRoute(HttpMethod.GET, '/analysis', handleAnalyze);
 // Account-aware filtering: returns services/APIs based on usage data
 registerRoute(HttpMethod.GET, '/capabilities', getUsedCapabilities);
+// Feature flags: deploy-time state of opt-in features for the UI
+registerRoute(HttpMethod.GET, '/features', getFeaturesRoute);
 
 // Policy Enforcer routes (parameterized)
 registerRoute(HttpMethod.POST, '/policies', createPolicyRoute);
 registerRoute(HttpMethod.GET, '/policies', listPoliciesRoute);
+// Exact route — must stay out of the :policyName param space below.
+registerRoute(HttpMethod.POST, '/policies/refresh-all', refreshAllPoliciesRoute);
 paramRouter.register(HttpMethod.GET, '/policies/:policyName', getPolicyRoute);
 paramRouter.register(HttpMethod.PUT, '/policies/:policyName', updatePolicyRoute);
 paramRouter.register(HttpMethod.DELETE, '/policies/:policyName', deletePolicyRoute);

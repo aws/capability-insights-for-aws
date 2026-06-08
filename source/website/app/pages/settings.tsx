@@ -11,6 +11,7 @@ import Popover from '@cloudscape-design/components/popover';
 import { PAGE_SETTINGS } from '~/constants/app';
 import { AnalysisNotEnabledError, capabilityInsightsClient } from '~/clients/capability-insights-client';
 import { formatTimestamp } from '~/utils/time-utils';
+import { useFeatureFlags } from '~/hooks/use-feature-flags';
 import type { SyncMetadata } from '@capability-insights/shared/types/sync-metadata';
 import { ExecutionStatus } from '@capability-insights/shared/types/analysis';
 
@@ -31,6 +32,7 @@ const POLL_INTERVAL_MS = 5000;
 type AnalysisStatus = 'idle' | 'running' | 'success' | 'error' | 'not-enabled';
 
 export default function Settings() {
+  const { refresh: refreshFeatureFlags } = useFeatureFlags();
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
@@ -77,10 +79,16 @@ export default function Settings() {
         if ('status' in result && result.status === ExecutionStatus.FAILED) {
           setAnalysisStatus('error');
           setAnalysisError(typeof result.error === 'string' ? result.error : 'Analysis failed');
+          // Surface the failed run's timestamp/status on the dashboard's
+          // "Last sync" popover without requiring a manual reload.
+          void refreshFeatureFlags();
           return;
         }
         setAnalysisResult(result as Record<string, unknown>);
         setAnalysisStatus('success');
+        // Refresh feature flags so the dashboard's "Last sync → Usage
+        // analysis" row reflects this run's new execution time immediately.
+        void refreshFeatureFlags();
       } catch (e) {
         setAnalysisStatus('error');
         setAnalysisError(e instanceof Error ? e.message : String(e));

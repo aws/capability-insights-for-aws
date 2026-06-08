@@ -195,6 +195,25 @@ Then follow these steps:
 
 Once complete, see [Accessing the Website](#accessing-the-website).
 
+#### Optional: Usage Analysis (personalization)
+
+The "My stuff" personalization layer is an optional second stack
+(`template/usage-analysis.template.json`, also in `build-assets.zip`). At a
+high level the manual path is:
+
+1. Deploy `CapabilityInsightsUsageAnalysis` (params: `WebsiteBucketName`,
+   `WebsiteBucketArn`, `DeploymentAssetsBucketName`, `LambdaCodeZipPath`,
+   `CloudTrailBucketName`).
+2. Re-deploy the base stack with the new stack's outputs added as parameters
+   (`AnalysisStateMachineArn`, `CloudTrailAnalyzerLambdaName`,
+   `CloudFormationAnalyzerLambdaName`, `ConfiguredCloudTrailBucketName`).
+3. Trigger the first run from the UI (Settings → Run analysis), or start the
+   `AnalysisStateMachineArn` execution directly.
+
+The scripted path (`npm run deploy -- --enable-usage-analysis`) automates all
+of this; prefer it unless you're restricted to AWS CLI + CloudFormation only.
+The "My stuff" toggle becomes usable once the first run finishes.
+
 ## Accessing the Website
 
 The website is hosted on S3 and accessible only from within your VPC. After deployment, navigate to:
@@ -387,6 +406,18 @@ npm run dev:deploy -- --enable-usage-analysis
 ```
 
 `--enable-usage-analysis` auto-discovers the CloudTrail bucket from your account. Pass `--cloudtrail-bucket <name>` to override.
+
+### Upgrading an Existing Deployment
+
+`npm run dev:deploy` only updates the `CapabilityInsightsForAWS` and (if enabled) `CapabilityInsightsUsageAnalysis` stacks. It does **not** update the `CapabilityInsightsSampleEnvironment` stack, which provides the VPC, subnets, endpoints, and IAM the rest of the deployment depends on. A new version can change that stack (for example, adding a VPC endpoint), and skipping it leads to confusing runtime failures.
+
+```bash
+git pull
+npm run dev:setup    # reconciles CapabilityInsightsSampleEnvironment (no-op if unchanged)
+npm run dev:deploy   # then update Capability Insights itself (use the same flags as your initial deploy)
+```
+
+> If your initial deploy passed `--ec2-key-pair`, `--enable-usage-analysis`, or other flags, pass the same ones again — the scripts don't remember them between runs.
 
 ### Available Scripts
 

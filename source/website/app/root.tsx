@@ -5,6 +5,8 @@ import Alert from '@cloudscape-design/components/alert';
 import { I18nProvider } from '@cloudscape-design/components/i18n';
 import enMessages from '@cloudscape-design/components/i18n/messages/all.en';
 
+import { FeatureFlagsProvider } from '~/hooks/use-feature-flags';
+
 import type { Route } from './+types/root';
 import './app.css';
 
@@ -35,11 +37,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <I18nProvider locale="en" messages={[enMessages]}>
-      <Suspense>
-        <AppShell>
-          <Outlet />
-        </AppShell>
-      </Suspense>
+      <FeatureFlagsProvider>
+        <Suspense>
+          <AppShell>
+            <Outlet />
+          </AppShell>
+        </Suspense>
+      </FeatureFlagsProvider>
     </I18nProvider>
   );
 }

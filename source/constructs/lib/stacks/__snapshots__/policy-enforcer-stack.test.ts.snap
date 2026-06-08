@@ -10,6 +10,13 @@ exports[`CloudFormation template matches snapshot 1`] = `
       },
       "Value": "CapabilityInsightsPolicyEnforcerIamHelper",
     },
+    "PolicyRefreshLambdaName": {
+      "Description": "Name of the in-VPC bulk refresh Lambda. The API Lambda invokes it for POST /policies/refresh-all.",
+      "Export": {
+        "Name": "CapabilityInsightsPolicyRefreshLambdaName",
+      },
+      "Value": "CapabilityInsightsPolicyEnforcerBulkRefresh",
+    },
     "PolicyTableArn": {
       "Description": "ARN of the Policy_Configuration DynamoDB table.",
       "Export": {
@@ -17,7 +24,7 @@ exports[`CloudFormation template matches snapshot 1`] = `
       },
       "Value": {
         "Fn::GetAtt": [
-          "PolicyConfigurationTable",
+          "PolicyConfigurationTable4F79693A",
           "Arn",
         ],
       },
@@ -31,6 +38,10 @@ exports[`CloudFormation template matches snapshot 1`] = `
     },
   },
   "Parameters": {
+    "BackendSubnetId": {
+      "Description": "Subnet (no internet gateway) for the bulk policy-refresh Lambda. Must reach DynamoDB and S3 via gateway endpoints.",
+      "Type": "AWS::EC2::Subnet::Id",
+    },
     "BootstrapVersion": {
       "Default": "/cdk-bootstrap/hnb659fds/version",
       "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
@@ -45,8 +56,199 @@ exports[`CloudFormation template matches snapshot 1`] = `
       "Description": "Path in the deployment assets bucket where the Lambda code zip is located.",
       "Type": "String",
     },
+    "PrivateVpcId": {
+      "Description": "VPC where the in-VPC bulk policy-refresh Lambda runs.",
+      "Type": "AWS::EC2::VPC::Id",
+    },
+    "WebsiteBucketName": {
+      "Description": "Website bucket the bulk refresh Lambda reads the catalog (apis.json) from.",
+      "Type": "String",
+    },
   },
   "Resources": {
+    "CapabilityInsightsPolicyEnforcerBulkRefresh": {
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "DeploymentAssetsBucketName",
+          },
+          "S3Key": {
+            "Ref": "LambdaCodeZipPath",
+          },
+        },
+        "Environment": {
+          "Variables": {
+            "IAM_HELPER_LAMBDA_NAME": "CapabilityInsightsPolicyEnforcerIamHelper",
+            "POLICY_TABLE_NAME": "CapabilityInsightsPolicyConfiguration",
+            "WEBSITE_BUCKET_NAME": {
+              "Ref": "WebsiteBucketName",
+            },
+          },
+        },
+        "FunctionName": "CapabilityInsightsPolicyEnforcerBulkRefresh",
+        "Handler": "policy-refresh-lambda-main.handler",
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsPolicyEnforcerBulkRefreshRole54742509",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 900,
+        "VpcConfig": {
+          "SecurityGroupIds": [
+            {
+              "Fn::GetAtt": [
+                "CapabilityInsightsPolicyEnforcerBulkRefreshSG",
+                "GroupId",
+              ],
+            },
+          ],
+          "SubnetIds": [
+            {
+              "Ref": "BackendSubnetId",
+            },
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CapabilityInsightsPolicyEnforcerBulkRefreshInvokePermission": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": "CapabilityInsightsPolicyEnforcerBulkRefresh",
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsPolicyEnforcerBulkRefreshWeeklyRule",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "CapabilityInsightsPolicyEnforcerBulkRefreshRole54742509": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for the Policy Enforcer bulk refresh Lambda.",
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:Query",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "PolicyConfigurationTable4F79693A",
+                      "Arn",
+                    ],
+                  },
+                },
+                {
+                  "Action": "s3:GetObject",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:\${AWS::Partition}:s3:::\${WebsiteBucket}/*",
+                      {
+                        "WebsiteBucket": {
+                          "Ref": "WebsiteBucketName",
+                        },
+                      },
+                    ],
+                  },
+                },
+                {
+                  "Action": "lambda:InvokeFunction",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": "arn:\${AWS::Partition}:lambda:\${AWS::Region}:\${AWS::AccountId}:function:CapabilityInsightsPolicyEnforcerIamHelper",
+                  },
+                },
+                {
+                  "Action": "sts:GetCallerIdentity",
+                  "Effect": "Allow",
+                  "Resource": "*",
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "BulkRefreshAccess",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsPolicyEnforcerBulkRefreshRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CapabilityInsightsPolicyEnforcerBulkRefreshSG": {
+      "Properties": {
+        "GroupDescription": "Security group for the Policy Enforcer bulk refresh Lambda.",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound (S3/DynamoDB gateway endpoints, Lambda VPC endpoint).",
+            "IpProtocol": "-1",
+          },
+        ],
+        "VpcId": {
+          "Ref": "PrivateVpcId",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "CapabilityInsightsPolicyEnforcerBulkRefreshWeeklyRule": {
+      "Properties": {
+        "Description": "Weekly bulk refresh of all Policy Enforcer policies against the latest catalog.",
+        "ScheduleExpression": "rate(7 days)",
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Arn": {
+              "Fn::GetAtt": [
+                "CapabilityInsightsPolicyEnforcerBulkRefresh",
+                "Arn",
+              ],
+            },
+            "Id": "PolicyEnforcerBulkRefreshTarget",
+          },
+        ],
+      },
+      "Type": "AWS::Events::Rule",
+    },
     "CapabilityInsightsPolicyEnforcerIamHelper": {
       "Properties": {
         "Code": {
@@ -62,7 +264,7 @@ exports[`CloudFormation template matches snapshot 1`] = `
         "MemorySize": 256,
         "Role": {
           "Fn::GetAtt": [
-            "CapabilityInsightsPolicyEnforcerIamHelperRole",
+            "CapabilityInsightsPolicyEnforcerIamHelperRole9152EAF0",
             "Arn",
           ],
         },
@@ -71,7 +273,7 @@ exports[`CloudFormation template matches snapshot 1`] = `
       },
       "Type": "AWS::Lambda::Function",
     },
-    "CapabilityInsightsPolicyEnforcerIamHelperRole": {
+    "CapabilityInsightsPolicyEnforcerIamHelperRole9152EAF0": {
       "Properties": {
         "AssumeRolePolicyDocument": {
           "Statement": [
@@ -88,7 +290,16 @@ exports[`CloudFormation template matches snapshot 1`] = `
         "Description": "Execution role for the Policy Enforcer IAM Helper Lambda. Scoped to PolicyEnforcer-* managed policies only.",
         "ManagedPolicyArns": [
           {
-            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
           },
         ],
         "Policies": [
@@ -122,7 +333,7 @@ exports[`CloudFormation template matches snapshot 1`] = `
       },
       "Type": "AWS::IAM::Role",
     },
-    "PolicyConfigurationTable": {
+    "PolicyConfigurationTable4F79693A": {
       "DeletionPolicy": "Delete",
       "Properties": {
         "AttributeDefinitions": [

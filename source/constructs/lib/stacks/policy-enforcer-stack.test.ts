@@ -70,6 +70,39 @@ describe('outputs', () => {
       Export: { Name: 'CapabilityInsightsPolicyTableArn' },
     });
   });
+
+  test('exports the bulk refresh Lambda name', () => {
+    template.hasOutput('PolicyRefreshLambdaName', {
+      Export: { Name: 'CapabilityInsightsPolicyRefreshLambdaName' },
+    });
+  });
+});
+
+describe('bulk refresh Lambda', () => {
+  const stack = makeStack();
+  const template = Template.fromStack(stack);
+
+  test('runs in the VPC with a 15-minute timeout', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'CapabilityInsightsPolicyEnforcerBulkRefresh',
+      Timeout: 900,
+      VpcConfig: { SubnetIds: [{ Ref: 'BackendSubnetId' }] },
+    });
+  });
+
+  test('is invoked weekly by an EventBridge rule', () => {
+    template.hasResourceProperties('AWS::Events::Rule', {
+      ScheduleExpression: 'rate(7 days)',
+      State: 'ENABLED',
+    });
+  });
+
+  test('grants EventBridge permission to invoke it', () => {
+    template.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunction',
+      Principal: 'events.amazonaws.com',
+    });
+  });
 });
 
 afterAll(() => {

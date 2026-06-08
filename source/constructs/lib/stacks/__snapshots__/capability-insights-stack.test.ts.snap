@@ -27,6 +27,18 @@ exports[`CloudFormation template matches snapshot 1`] = `
         },
       ],
     },
+    "HasPolicyRefreshLambda": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "PolicyRefreshLambdaName",
+            },
+            "",
+          ],
+        },
+      ],
+    },
     "HasPolicyTable": {
       "Fn::Not": [
         {
@@ -101,6 +113,11 @@ exports[`CloudFormation template matches snapshot 1`] = `
     "IamHelperLambdaName": {
       "Default": "",
       "Description": "Name of the Policy Enforcer IAM Helper Lambda. Leave empty if Policy Enforcer is not enabled.",
+      "Type": "String",
+    },
+    "PolicyRefreshLambdaName": {
+      "Default": "",
+      "Description": "Name of the Policy Enforcer bulk refresh Lambda. Leave empty if Policy Enforcer is not enabled.",
       "Type": "String",
     },
     "PolicyTableName": {
@@ -461,6 +478,9 @@ exports[`CloudFormation template matches snapshot 1`] = `
             "IAM_HELPER_LAMBDA_NAME": {
               "Ref": "IamHelperLambdaName",
             },
+            "POLICY_REFRESH_LAMBDA_NAME": {
+              "Ref": "PolicyRefreshLambdaName",
+            },
             "POLICY_TABLE_NAME": {
               "Ref": "PolicyTableName",
             },
@@ -588,6 +608,7 @@ exports[`CloudFormation template matches snapshot 1`] = `
                 {
                   "Action": [
                     "states:StartExecution",
+                    "states:ListExecutions",
                   ],
                   "Effect": "Allow",
                   "Resource": {
@@ -749,6 +770,36 @@ exports[`CloudFormation template matches snapshot 1`] = `
               "Version": "2012-10-17",
             },
             "PolicyName": "PolicyEnforcerIamHelperInvoke",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "lambda:InvokeFunction",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::If": [
+                      "HasPolicyRefreshLambda",
+                      {
+                        "Fn::Sub": [
+                          "arn:\${AWS::Partition}:lambda:\${AWS::Region}:\${AWS::AccountId}:function:\${FunctionName}",
+                          {
+                            "FunctionName": {
+                              "Ref": "PolicyRefreshLambdaName",
+                            },
+                          },
+                        ],
+                      },
+                      {
+                        "Fn::Sub": "arn:\${AWS::Partition}:lambda:\${AWS::Region}:\${AWS::AccountId}:function:none",
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "PolicyEnforcerBulkRefreshInvoke",
           },
         ],
         "RoleName": {

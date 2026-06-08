@@ -4,6 +4,7 @@ import type { ApiService } from '@capability-insights/shared/types/capability/ap
 import type { CfnResource } from '@capability-insights/shared/types/capability/cfn';
 import type { SyncMetadata } from '@capability-insights/shared/types/sync-metadata';
 import type { UsedCapabilities } from '@capability-insights/shared/types/used-capabilities';
+import type { FeatureFlags } from '@capability-insights/shared/types/feature-flags';
 import { AnalyzerType, ExecutionStatus } from '@capability-insights/shared/types/analysis';
 import { Scope } from '@capability-insights/shared/types/scope';
 import { s3Client } from './s3-client';
@@ -150,6 +151,28 @@ export class CapabilityInsightsClient {
       const res = await fetch(`${baseUrl}/capabilities?scope=${scope}&usageFilter=${usageFilter}`);
       if (!res.ok) return null;
       return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Returns the deploy-time state of every opt-in feature in one fetch.
+   *
+   * Used by the UI to decide whether to surface feature controls (e.g. the
+   * My Stuff toggle, Policy Enforcer nav link). The backend caches the
+   * response for 60s, so calling this on every page mount is cheap.
+   *
+   * Returns `null` if the API is unreachable. Callers should treat null as
+   * "all features unknown" and render a conservative fallback (typically:
+   * disabled controls until the next refresh).
+   */
+  async getFeatureFlags(): Promise<FeatureFlags | null> {
+    try {
+      const baseUrl = await this.getApiBaseUrl();
+      const res = await fetch(`${baseUrl}/features`);
+      if (!res.ok) return null;
+      return (await res.json()) as FeatureFlags;
     } catch {
       return null;
     }

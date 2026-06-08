@@ -2,7 +2,8 @@ import type { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { corsHeaders } from '../types/api';
 import { StatusCode } from '../constants/status-codes';
 import { ErrorResponse } from '../constants/errors';
-import { EnvironmentKey, getEnv } from '../constants/environment';
+import { EnvironmentKey, getEnv, getOptionalEnv } from '../constants/environment';
+import { CatalogKey } from '../constants/data-paths';
 import { PolicyStatus, RefreshOutcome } from '@capability-insights/shared/types/policy-enforcer/policy-enums';
 import { logger } from '../util/logger';
 import { S3BucketClient } from '../services/s3-client';
@@ -15,18 +16,16 @@ import { computeAllowList } from '../policy-enforcer/allow-list-engine';
 import { generatePolicyDocument } from '../policy-enforcer/policy-document-generator';
 import { validatePolicyConfiguration, validatePolicyUpdate } from '../policy-enforcer/validation';
 import { IamPolicyApplier } from '../services/policy-enforcer/iam-policy-applier';
+import { refreshPolicy, PolicyTooLargeError } from '../services/policy-enforcer/policy-refresher';
+import { LambdaFunctionClient } from '../services/lambda-client';
 import type {
   CreatePolicyRequest,
   UpdatePolicyRequest,
   ListPoliciesQuery,
   PreviewResponse,
-  RefreshResponse,
 } from '@capability-insights/shared/types/policy-enforcer/policy-api';
 import type { PolicyConfiguration } from '@capability-insights/shared/types/policy-enforcer/policy-configuration';
 import type { ApiService } from '@capability-insights/shared/types/capability/api';
-
-/** Path to the catalog data within the website bucket. */
-const CATALOG_KEY = 'data/json/apis.json';
 
 /**
  * Lazy initialization helper so test code can set env vars after import.
@@ -51,7 +50,7 @@ function getApplier(): IamPolicyApplier {
 
 async function loadCatalog(): Promise<ApiService[]> {
   const bucket = new S3BucketClient(getEnv(EnvironmentKey.WEBSITE_BUCKET_NAME));
-  const raw = await bucket.getObject(CATALOG_KEY);
+  const raw = await bucket.getObject(CatalogKey.APIS);
   return JSON.parse(raw) as ApiService[];
 }
 
@@ -70,56 +69,6 @@ function ok(body: unknown, status: number = StatusCode.OK): APIGatewayProxyResul
     headers: corsHeaders,
     body: JSON.stringify(body),
   };
-}
-
-/**
- * Recomputes the Allow_List against the current catalog and applies the
- * resulting policy document(s) to AWS IAM. Used by both the `refresh` route
- * and the inline-refresh flow inside `create` / `update`.
- *
- * Returns the new policy state for the caller to persist back to DynamoDB
- * along with `lastRefreshTime`, `lastRefreshOutcome`, and `lastActionCount`.
- */
-async function refreshPolicy(policy: PolicyConfiguration, catalogData: ApiService[]): Promise<RefreshResponse> {
-  const allowList = computeAllowList({ catalogData, configuration: policy });
-  const generated = generatePolicyDocument({
-    catalogData,
-    configuration: policy,
-    policyName: policy.policyName,
-    generationTimestamp: new Date().toISOString(),
-  });
-
-  if (generated.error) {
-    throw new PolicyTooLargeError(generated.error);
-  }
-
-  const existingArns = [policy.policyArn, ...(policy.additionalPolicyArns ?? [])].filter((a): a is string =>
-    Boolean(a),
-  );
-
-  const applied = await getApplier().apply(
-    policy.policyName,
-    policy.description ?? `Managed by Capability Insights Policy Enforcer: ${policy.policyName}`,
-    generated,
-    existingArns,
-  );
-
-  return {
-    message: 'Policy refreshed',
-    policyArn: applied.policyArn,
-    additionalPolicyArns: applied.additionalPolicyArns.length > 0 ? applied.additionalPolicyArns : undefined,
-    actionCount: allowList.actionCount,
-    splitRequired: generated.splitRequired,
-    totalSize: generated.totalSize,
-  };
-}
-
-/** Surfaces the size-limit error from the document generator as a 400. */
-class PolicyTooLargeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'PolicyTooLargeError';
-  }
 }
 
 // =====================================================================
@@ -162,7 +111,7 @@ export async function createPolicyRoute(event: APIGatewayProxyEvent): Promise<AP
   }
 
   try {
-    const refresh = await refreshPolicy(policy, catalogData);
+    const refresh = await refreshPolicy(policy, catalogData, getApplier());
     const updated = await store.updatePolicy(policy.policyName, {
       status: PolicyStatus.ACTIVE,
       policyArn: refresh.policyArn,
@@ -262,7 +211,7 @@ export async function updatePolicyRoute(
   }
 
   try {
-    const refresh = await refreshPolicy(updated, catalogData);
+    const refresh = await refreshPolicy(updated, catalogData, getApplier());
     const persisted = await store.updatePolicy(updated.policyName, {
       status: PolicyStatus.ACTIVE,
       policyArn: refresh.policyArn,
@@ -337,7 +286,7 @@ export async function refreshPolicyRoute(
   }
 
   try {
-    const refresh = await refreshPolicy(policy, catalogData);
+    const refresh = await refreshPolicy(policy, catalogData, getApplier());
     const persisted = await store.updatePolicy(policy.policyName, {
       status: PolicyStatus.ACTIVE,
       policyArn: refresh.policyArn,
@@ -401,6 +350,45 @@ export async function previewPolicyRoute(
   };
 
   return ok(preview);
+}
+
+/**
+ * POST /policies/refresh-all — fire-and-forget bulk refresh.
+ *
+ * Refreshing every policy can exceed API Gateway's 30s timeout (each policy
+ * is an IAM round-trip via the helper Lambda), so this invokes the dedicated
+ * bulk-refresh Lambda asynchronously and returns 202 immediately. The same
+ * Lambda is also driven by a weekly EventBridge schedule.
+ */
+export async function refreshAllPoliciesRoute(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
+  // Feature must be deployed — the env var is only present when the Policy
+  // Enforcer stack is enabled.
+  const bulkLambdaName = getOptionalEnv(EnvironmentKey.POLICY_REFRESH_LAMBDA_NAME);
+  if (!bulkLambdaName) {
+    return {
+      statusCode: StatusCode.SERVICE_UNAVAILABLE,
+      headers: corsHeaders,
+      body: JSON.stringify({
+        error: 'Policy Enforcer is not enabled',
+        message: 'The Policy Enforcer stack is not deployed. Re-run deploy with --enable-policy-enforcer.',
+      }),
+    };
+  }
+
+  const store = getStore(event.requestContext.accountId);
+  const policies = await store.listPolicies();
+  if (policies.length === 0) {
+    return ok({ message: 'No policies to refresh', total: 0 }, StatusCode.OK);
+  }
+
+  await new LambdaFunctionClient(bulkLambdaName).invokeAsync();
+  return ok(
+    {
+      message: `Refresh started for ${policies.length} ${policies.length === 1 ? 'policy' : 'policies'}`,
+      total: policies.length,
+    },
+    StatusCode.ACCEPTED,
+  );
 }
 
 // Reset cached singletons (used by tests).

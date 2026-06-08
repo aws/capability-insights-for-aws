@@ -30,6 +30,12 @@ export interface CapabilityInsightsStackProps extends cdk.StackProps {
    * Companion to `policyTableName`.
    */
   iamHelperLambdaName?: string;
+  /**
+   * Name of the in-VPC bulk policy-refresh Lambda for the Policy Enforcer.
+   * Companion to `policyTableName`. The API Lambda invokes it asynchronously
+   * for `POST /policies/refresh-all`.
+   */
+  policyRefreshLambdaName?: string;
 }
 
 export enum CapabilityInsightsStackOutputs {
@@ -139,6 +145,16 @@ export class CapabilityInsightsStack extends cdk.Stack {
 
     const hasIamHelper = new cdk.CfnCondition(this, 'HasIamHelper', {
       expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(iamHelperLambdaNameParameter.valueAsString, '')),
+    });
+
+    const policyRefreshLambdaNameParameter = new cdk.CfnParameter(this, 'PolicyRefreshLambdaName', {
+      type: 'String',
+      description: 'Name of the Policy Enforcer bulk refresh Lambda. Leave empty if Policy Enforcer is not enabled.',
+      default: props?.policyRefreshLambdaName ?? '',
+    });
+
+    const hasPolicyRefreshLambda = new cdk.CfnCondition(this, 'HasPolicyRefreshLambda', {
+      expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(policyRefreshLambdaNameParameter.valueAsString, '')),
     });
 
     const sourceFoldersParameter = new cdk.CfnParameter(this, 'SourceFolders', {
@@ -429,9 +445,11 @@ export class CapabilityInsightsStack extends cdk.Stack {
             Version: '2012-10-17',
             Statement: [
               {
-                // StartExecution operates on the state machine ARN.
+                // StartExecution and ListExecutions both operate on the
+                // state machine ARN. Grouped because the resource is the
+                // same and toggled by the same condition.
                 Effect: 'Allow',
-                Action: ['states:StartExecution'],
+                Action: ['states:StartExecution', 'states:ListExecutions'],
                 Resource: cdk.Fn.conditionIf(
                   hasAnalysisStateMachine.logicalId,
                   analysisStateMachineArnParameter.valueAsString,
@@ -548,6 +566,29 @@ export class CapabilityInsightsStack extends cdk.Stack {
             ],
           },
         },
+        {
+          // Policy Enforcer: lambda:InvokeFunction on the bulk refresh Lambda.
+          // The API Lambda triggers `POST /policies/refresh-all` by invoking
+          // this Lambda asynchronously (the work can exceed API Gateway's 30s
+          // timeout). Scoped to the single refresh Lambda when deployed.
+          policyName: 'PolicyEnforcerBulkRefreshInvoke',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: 'lambda:InvokeFunction',
+                Resource: cdk.Fn.conditionIf(
+                  hasPolicyRefreshLambda.logicalId,
+                  cdk.Fn.sub('arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${FunctionName}', {
+                    FunctionName: policyRefreshLambdaNameParameter.valueAsString,
+                  }),
+                  cdk.Fn.sub('arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:none'),
+                ),
+              },
+            ],
+          },
+        },
       ],
     });
     const apiLambdaFunction = new lambda.CfnFunction(this, apiLambdaName, {
@@ -575,6 +616,7 @@ export class CapabilityInsightsStack extends cdk.Stack {
           CONFIGURED_CLOUDTRAIL_BUCKET: configuredCloudTrailBucketParameter.valueAsString,
           POLICY_TABLE_NAME: policyTableNameParameter.valueAsString,
           IAM_HELPER_LAMBDA_NAME: iamHelperLambdaNameParameter.valueAsString,
+          POLICY_REFRESH_LAMBDA_NAME: policyRefreshLambdaNameParameter.valueAsString,
         },
       },
     });

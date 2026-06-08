@@ -37,6 +37,19 @@ export const EnvironmentKey = {
    * endpoint. Set by the Policy Enforcer stack.
    */
   IAM_HELPER_LAMBDA_NAME: 'IAM_HELPER_LAMBDA_NAME',
+  /**
+   * Name of the in-VPC bulk policy-refresh Lambda. Invoked asynchronously by
+   * `POST /policies/refresh-all` and on a weekly EventBridge schedule to
+   * recompute every policy against the latest catalog. Set by the Policy
+   * Enforcer stack; absent when the feature is not deployed.
+   */
+  POLICY_REFRESH_LAMBDA_NAME: 'POLICY_REFRESH_LAMBDA_NAME',
+  /**
+   * Optional override (in milliseconds) for the in-memory TTL of the
+   * `GET /features` response cache. Defaults to 60000 (60s) when unset or
+   * not a positive integer. Primarily useful for local testing/debugging.
+   */
+  FEATURES_CACHE_TTL_MS: 'FEATURES_CACHE_TTL_MS',
 } as const;
 
 export type EnvironmentKey = (typeof EnvironmentKey)[keyof typeof EnvironmentKey];

@@ -1,5 +1,6 @@
 import { S3BucketClient } from '../services/s3-client';
 import { EnvironmentKey, getEnv } from '../constants/environment';
+import { usedCapabilitiesKey } from '../constants/data-paths';
 import { Scope, VALID_SCOPES } from '@capability-insights/shared/types/scope';
 import { UsageFilter, VALID_USAGE_FILTERS } from '@capability-insights/shared/types/usage-filter';
 import { StatusCode } from '../constants/status-codes';
@@ -51,7 +52,7 @@ export const getUsedCapabilities = async (event: APIGatewayProxyEvent): Promise<
     }
 
     const s3 = new S3BucketClient(getEnv(EnvironmentKey.WEBSITE_BUCKET_NAME));
-    const key = `data/json/used-capabilities-${scope}-${usageFilter}.json`;
+    const key = usedCapabilitiesKey(scope, usageFilter);
 
     logger.info('Fetching used capabilities', { key });
 
