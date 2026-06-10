@@ -199,10 +199,13 @@ describe('generatePolicyDocument — SCP', () => {
     expect(result.error).toBeUndefined();
   });
 
-  it('returns an error when SCP would exceed 5,120 chars', () => {
+  it('returns an error only when the SCP allow-list exceeds the 5-document limit', () => {
+    // Each entry serializes to roughly `"longservicenameNNNN:*",` (~25 chars).
+    // 5 documents hold ~5 × 5,120 chars; well over 5,000 such entries are
+    // needed to overflow the 5-document budget.
     const services: ApiService[] = [];
-    for (let i = 0; i < 1500; i++) {
-      services.push(buildService(`service${i}`, [{ name: 'Action', available: true }]));
+    for (let i = 0; i < 6000; i++) {
+      services.push(buildService(`longservicename${i}`, [{ name: 'Action', available: true }]));
     }
     const result = generatePolicyDocument({
       catalogData: services,
@@ -212,11 +215,35 @@ describe('generatePolicyDocument — SCP', () => {
     });
 
     expect(result.error).toBeDefined();
-    expect(result.error).toMatch(/5,120/);
-    expect(result.totalSize).toBeGreaterThan(5120);
+    expect(result.error).toMatch(/5-SCP-per-target limit/);
+    expect(result.documents.length).toBeGreaterThan(5);
   });
 
-  it('combines blanket and specific deny in a single SCP document', () => {
+  it('splits a mid-size SCP allow-list across multiple documents without erroring', () => {
+    // ~600 fully-available services overflow a single 5,120-char SCP but fit
+    // within the 5-document budget.
+    const services: ApiService[] = [];
+    for (let i = 0; i < 600; i++) {
+      services.push(buildService(`svc${i}`, [{ name: 'Action', available: true }]));
+    }
+    const result = generatePolicyDocument({
+      catalogData: services,
+      configuration: config({ policyType: 'SCP' }),
+      policyName: 'Test',
+      generationTimestamp: TS,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.documents.length).toBeGreaterThan(1);
+    expect(result.documents.length).toBeLessThanOrEqual(5);
+    expect(result.splitRequired).toBe(true);
+    // Every document must individually fit within the SCP size limit.
+    for (const doc of result.documents) {
+      expect(JSON.stringify(doc).length).toBeLessThanOrEqual(5120);
+    }
+  });
+
+  it('combines blanket and specific deny across SCP documents', () => {
     const apis = Array.from({ length: 20 }, (_, i) => ({
       name: `Avail${i}`,
       available: true,
@@ -230,10 +257,13 @@ describe('generatePolicyDocument — SCP', () => {
       generationTimestamp: TS,
     });
 
-    expect(result.documents).toHaveLength(1);
-    expect(result.documents[0].Statement).toHaveLength(2);
-    expect(result.documents[0].Statement[0].NotAction).toEqual(['s3:*']);
-    expect(result.documents[0].Statement[1].Action).toEqual(['s3:Bad']);
+    // Small input — fits in one blanket-deny doc plus one specific-deny doc.
+    expect(result.error).toBeUndefined();
+    const allStatements = result.documents.flatMap(d => d.Statement);
+    const blanket = allStatements.find(s => s.NotAction);
+    const specific = allStatements.find(s => s.Action);
+    expect(blanket?.NotAction).toEqual(['s3:*']);
+    expect(specific?.Action).toEqual(['s3:Bad']);
   });
 });
 

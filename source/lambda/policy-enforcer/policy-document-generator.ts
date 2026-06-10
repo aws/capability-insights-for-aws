@@ -13,6 +13,13 @@ const IAM_SIZE_LIMIT = 6144;
 /** AWS hard size limit for an SCP document, in characters. */
 const SCP_SIZE_LIMIT = 5120;
 
+/**
+ * Maximum number of SCPs that AWS Organizations allows attached to a single
+ * target (account or OU). The generator may split an SCP allow-list across up
+ * to this many documents; beyond it, the scope genuinely cannot be expressed.
+ */
+const MAX_SCP_DOCUMENTS = 5;
+
 export interface PolicyDocumentOptions {
   catalogData: ApiService[];
   configuration: PolicyConfiguration;
@@ -37,7 +44,7 @@ export interface PolicyDocument {
 }
 
 export interface GeneratedPolicy {
-  /** One or more documents. IAM may split; SCP never does. */
+  /** One or more documents. Both IAM and SCP may split across documents. */
   documents: PolicyDocument[];
   /** Sum of `JSON.stringify(doc).length` across all documents. */
   totalSize: number;
@@ -170,7 +177,11 @@ function generateApiDenySid(timestamp: string, partNumber: number): string {
  * Bin-pack `actions` into IAM-sized documents using binary search to find
  * the maximum number of actions that fit in each document.
  */
-function binPackApiDenyActions(actions: string[], timestamp: string): PolicyDocument[] {
+function binPackApiDenyActions(
+  actions: string[],
+  timestamp: string,
+  sizeLimit: number = IAM_SIZE_LIMIT,
+): PolicyDocument[] {
   if (actions.length === 0) return [];
 
   const documents: PolicyDocument[] = [];
@@ -187,7 +198,7 @@ function binPackApiDenyActions(actions: string[], timestamp: string): PolicyDocu
     while (lo <= hi) {
       const mid = Math.floor((lo + hi) / 2);
       const candidate = buildApiDenyDocument(remaining.slice(0, mid), sid);
-      if (getDocumentSize(candidate) <= IAM_SIZE_LIMIT) {
+      if (getDocumentSize(candidate) <= sizeLimit) {
         bestFit = mid;
         lo = mid + 1;
       } else {
@@ -211,7 +222,11 @@ function binPackApiDenyActions(actions: string[], timestamp: string): PolicyDocu
 /**
  * Bin-pack `notActions` into IAM-sized blanket-deny documents.
  */
-function binPackBlanketDenyEntries(notActions: string[], baseSid: string): PolicyDocument[] {
+function binPackBlanketDenyEntries(
+  notActions: string[],
+  baseSid: string,
+  sizeLimit: number = IAM_SIZE_LIMIT,
+): PolicyDocument[] {
   if (notActions.length === 0) {
     // Empty NotAction means "deny everything" — keep one document so the
     // caller can return a structurally-valid policy and surface the warning
@@ -234,7 +249,7 @@ function binPackBlanketDenyEntries(notActions: string[], baseSid: string): Polic
     while (lo <= hi) {
       const mid = Math.floor((lo + hi) / 2);
       const candidate = buildBlanketDenyDocument(remaining.slice(0, mid), sid);
-      if (getDocumentSize(candidate) <= IAM_SIZE_LIMIT) {
+      if (getDocumentSize(candidate) <= sizeLimit) {
         bestFit = mid;
         lo = mid + 1;
       } else {
@@ -350,50 +365,37 @@ export function generatePolicyDocument(options: PolicyDocumentOptions): Generate
 
   const blanketDenySid = generateBlanketDenySid(generationTimestamp);
 
-  // SCP path: must fit in a single document; cannot split.
+  // SCP path: bin-pack into multiple documents at the SCP size limit. AWS
+  // Organizations allows up to MAX_SCP_DOCUMENTS SCPs per target, so the
+  // effective budget is MAX_SCP_DOCUMENTS × SCP_SIZE_LIMIT rather than a
+  // single 5,120-char document.
   if (policyType === PolicyType.SCP) {
-    const statements: PolicyStatement[] = [
-      {
-        Sid: blanketDenySid,
-        Effect: 'Deny',
-        NotAction: notActionEntries,
-        Resource: '*',
-      },
-    ];
+    const blanketDocs = binPackBlanketDenyEntries(notActionEntries, blanketDenySid, SCP_SIZE_LIMIT);
+    const apiDenyDocs = binPackApiDenyActions(uniqueSpecificDenyActions, generationTimestamp, SCP_SIZE_LIMIT);
+    const documents = [...blanketDocs, ...apiDenyDocs];
+    const totalSize = documents.reduce((sum, doc) => sum + getDocumentSize(doc), 0);
 
-    if (uniqueSpecificDenyActions.length > 0) {
-      statements.push({
-        Sid: generateApiDenySid(generationTimestamp, 1),
-        Effect: 'Deny',
-        Action: uniqueSpecificDenyActions,
-        Resource: '*',
-      });
-    }
-
-    const document: PolicyDocument = { Version: '2012-10-17', Statement: statements };
-    const totalSize = getDocumentSize(document);
-
-    if (totalSize > SCP_SIZE_LIMIT) {
+    if (documents.length > MAX_SCP_DOCUMENTS) {
       return {
-        documents: [document],
+        documents,
         totalSize,
-        splitRequired: false,
+        splitRequired: documents.length > 1,
         blanketDenyServiceCount,
         partialDenyActionCount: uniqueSpecificDenyActions.length,
         fullyAvailableServiceCount,
         partiallyAvailableServiceCount,
         error:
-          `SCP document is ${totalSize} characters, exceeding the 5,120-character limit. ` +
-          'Service Control Policies cannot be split across multiple documents. ' +
+          `SCP allow-list requires ${documents.length} documents, exceeding the ` +
+          `${MAX_SCP_DOCUMENTS}-SCP-per-target limit (${SCP_SIZE_LIMIT} characters each). ` +
           'Reduce the scope by selecting fewer regions, switching to intersection mode, ' +
           'or use IAM Policy type instead.',
       };
     }
 
     return {
-      documents: [document],
+      documents,
       totalSize,
-      splitRequired: false,
+      splitRequired: documents.length > 1,
       blanketDenyServiceCount,
       partialDenyActionCount: uniqueSpecificDenyActions.length,
       fullyAvailableServiceCount,

@@ -333,6 +333,8 @@ Adds regional governance. Deployed when you pass `--enable-policy-enforcer` to `
 
 Refresh runs synchronously when you `POST /policies`, `PUT /policies/:id`, or `POST /policies/:id/refresh` — there is no background schedule. Catalog data only changes when the DataFetch Lambda runs, so re-computing on its own cadence has no benefit.
 
+A generated allow-list can exceed AWS's per-document size limits. The feature handles this by splitting across multiple documents: IAM Managed Policies split at 6,144 characters each, and Service Control Policies split at 5,120 characters each across up to 5 documents (the AWS Organizations limit of 5 SCPs per target). Generation only fails when even 5 SCP documents cannot hold the allow-list — in which case, reduce scope (fewer regions, intersection mode) or use the IAM policy type.
+
 | Resource                       | Description                                                                                    |
 | ------------------------------ | ---------------------------------------------------------------------------------------------- |
 | DynamoDB Table                 | Stores `PolicyConfiguration` records (regions, mode, exceptions, ARNs, refresh state)          |

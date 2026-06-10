@@ -58,6 +58,10 @@ export class IamPolicyApplier {
     existingArns: string[],
   ): Promise<ApplyPolicyResult> {
     const newArns: string[] = [];
+    // Track ARNs created by THIS invocation so we can roll them back if a
+    // later part fails. Updates to pre-existing ARNs are not rolled back —
+    // those policies were already part of the user's state.
+    const createdThisRun: string[] = [];
 
     for (let i = 0; i < generated.documents.length; i++) {
       const doc = JSON.stringify(generated.documents[i]);
@@ -65,27 +69,37 @@ export class IamPolicyApplier {
       const policyName = buildPolicyName(configName, part);
       const existing = existingArns[i];
 
-      if (!existing) {
-        const result = await this.invoke({
-          action: 'create',
-          policyName,
-          policyDocument: doc,
-          description,
-        });
-        if (!result.success || !result.policyArn) {
-          throw new Error(`IAM helper failed to create ${policyName}: ${result.error ?? 'unknown'}`);
+      try {
+        if (!existing) {
+          const result = await this.invoke({
+            action: 'create',
+            policyName,
+            policyDocument: doc,
+            description,
+          });
+          if (!result.success || !result.policyArn) {
+            throw new Error(`IAM helper failed to create ${policyName}: ${result.error ?? 'unknown'}`);
+          }
+          newArns.push(result.policyArn);
+          createdThisRun.push(result.policyArn);
+        } else {
+          const result = await this.invoke({
+            action: 'update',
+            policyArn: existing,
+            policyDocument: doc,
+          });
+          if (!result.success) {
+            throw new Error(`IAM helper failed to update ${existing}: ${result.error ?? 'unknown'}`);
+          }
+          newArns.push(existing);
         }
-        newArns.push(result.policyArn);
-      } else {
-        const result = await this.invoke({
-          action: 'update',
-          policyArn: existing,
-          policyDocument: doc,
-        });
-        if (!result.success) {
-          throw new Error(`IAM helper failed to update ${existing}: ${result.error ?? 'unknown'}`);
-        }
-        newArns.push(existing);
+      } catch (error) {
+        // Roll back any policies we created in this invocation before
+        // re-raising. Without this, a failure on Part N leaves Parts
+        // 1..N-1 orphaned in IAM, blocking the next retry on the same
+        // configName with "Duplicate names are not allowed."
+        await this.rollback(createdThisRun);
+        throw error;
       }
     }
 
@@ -104,6 +118,26 @@ export class IamPolicyApplier {
       policyArn: newArns[0],
       additionalPolicyArns: newArns.slice(1),
     };
+  }
+
+  /**
+   * Best-effort cleanup of policies created during a failed apply. A
+   * rollback delete that itself fails is logged and swallowed: the original
+   * apply error is what the caller needs to see.
+   */
+  private async rollback(arns: string[]): Promise<void> {
+    for (const arn of arns) {
+      const result = await this.invoke({ action: 'delete', policyArn: arn }).catch(error => ({
+        success: false,
+        error: String(error),
+      }));
+      if (!result.success) {
+        logger.warn('Rollback: failed to delete partially-created policy', {
+          policyArn: arn,
+          error: result.error,
+        });
+      }
+    }
   }
 
   /** Deletes all managed policies associated with a configuration. */

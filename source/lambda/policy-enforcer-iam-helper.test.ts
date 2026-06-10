@@ -8,12 +8,17 @@ import {
   DeletePolicyVersionCommand,
   ListPolicyVersionsCommand,
 } from '@aws-sdk/client-iam';
+import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { handler } from './policy-enforcer-iam-helper';
 
 const iamMock = mockClient(IAMClient);
+const stsMock = mockClient(STSClient);
 
 beforeEach(() => {
   iamMock.reset();
+  stsMock.reset();
+  // Default identity for the adopt-on-existing path; tests override as needed.
+  stsMock.on(GetCallerIdentityCommand).resolves({ Account: '123456789012' });
 });
 
 describe('create', () => {
@@ -65,6 +70,35 @@ describe('create', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('LimitExceeded');
+  });
+
+  it('adopts an existing policy when CreatePolicy returns EntityAlreadyExists', async () => {
+    const alreadyExists = Object.assign(new Error('A policy called PolicyEnforcer-Test already exists.'), {
+      name: 'EntityAlreadyExistsException',
+    });
+    iamMock.on(CreatePolicyCommand).rejects(alreadyExists);
+    // Adoption path: list versions to trim, then create a new default version.
+    iamMock.on(ListPolicyVersionsCommand).resolves({
+      Versions: [{ VersionId: 'v1', IsDefaultVersion: true, CreateDate: new Date('2026-06-01') }],
+    });
+    iamMock.on(CreatePolicyVersionCommand).resolves({});
+
+    const result = await handler({
+      action: 'create',
+      policyName: 'PolicyEnforcer-Test',
+      policyDocument: '{"Version":"2012-10-17","Statement":[]}',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.policyArn).toBe('arn:aws:iam::123456789012:policy/PolicyEnforcer-Test');
+
+    // Should have created a fresh default version against the adopted ARN.
+    const versionCalls = iamMock.commandCalls(CreatePolicyVersionCommand);
+    expect(versionCalls).toHaveLength(1);
+    expect(versionCalls[0].args[0].input).toMatchObject({
+      PolicyArn: 'arn:aws:iam::123456789012:policy/PolicyEnforcer-Test',
+      SetAsDefault: true,
+    });
   });
 });
 

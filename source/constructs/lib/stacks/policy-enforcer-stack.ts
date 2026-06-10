@@ -6,7 +6,6 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 
 export interface PolicyEnforcerStackProps extends cdk.StackProps {
-  policyTableName?: string;
   /** S3 bucket containing the Lambda code zip. */
   deploymentAssetsBucketName?: string;
   /** Path within the deployment assets bucket to the Lambda code zip. */
@@ -85,10 +84,17 @@ export class PolicyEnforcerStack extends cdk.Stack {
     });
 
     // ----- DynamoDB table -----
+    //
+    // The logical ID is explicitly pinned via overrideLogicalId so a future
+    // CDK refactor (e.g. wrapping the table in a sub-construct) cannot
+    // silently change it underneath the hardcoded tableName. A hardcoded
+    // physical name + a drifting logical ID would have CFN plan an Add for
+    // a brand-new table while the old one still owns the name, failing
+    // ResourceExistenceCheck. Pinning keeps both stable; an intentional
+    // future replacement must change BOTH the logical ID and the name.
 
-    const policyTableName = props?.policyTableName ?? `${prefix}PolicyConfiguration`;
+    const policyTableName = `${prefix}PolicyConfiguration`;
     this.tableName = policyTableName;
-
     const policyTable = new dynamodb.Table(this, 'PolicyConfigurationTable', {
       tableName: policyTableName,
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -105,6 +111,7 @@ export class PolicyEnforcerStack extends cdk.Stack {
       sortKey: { name: 'policyName', type: dynamodb.AttributeType.STRING },
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
+    (policyTable.node.defaultChild as cdk.CfnElement).overrideLogicalId('PolicyConfigurationTable');
 
     new cdk.CfnOutput(this, PolicyEnforcerStackOutputs.PolicyTableName, {
       value: policyTableName,
@@ -124,6 +131,9 @@ export class PolicyEnforcerStack extends cdk.Stack {
     this.iamHelperLambdaName = iamHelperLambdaName;
 
     const iamHelperRole = new iam.Role(this, `${iamHelperLambdaName}Role`, {
+      // The logical ID is pinned below via overrideLogicalId so this
+      // hardcoded physical name stays consistent with it. See the
+      // DynamoDB table above for the reasoning.
       roleName: cdk.Fn.sub(`${iamHelperLambdaName}Role-\${AWS::Region}`),
       description:
         'Execution role for the Policy Enforcer IAM Helper Lambda. Scoped to PolicyEnforcer-* managed policies only.',
@@ -144,10 +154,18 @@ export class PolicyEnforcerStack extends cdk.Stack {
               ],
               resources: [cdk.Fn.sub('arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/PolicyEnforcer-*')],
             }),
+            // Resolve the runtime account ID for the adopt-on-existing path.
+            // Required because the Lambda runtime does not expose the
+            // function ARN via env vars — STS is the only portable lookup.
+            new iam.PolicyStatement({
+              actions: ['sts:GetCallerIdentity'],
+              resources: ['*'],
+            }),
           ],
         }),
       },
     });
+    (iamHelperRole.node.defaultChild as cdk.CfnElement).overrideLogicalId(`${iamHelperLambdaName}Role`);
 
     new lambda.CfnFunction(this, iamHelperLambdaName, {
       functionName: iamHelperLambdaName,
@@ -192,6 +210,7 @@ export class PolicyEnforcerStack extends cdk.Stack {
     });
 
     const refreshRole = new iam.Role(this, `${refreshLambdaName}Role`, {
+      // Logical ID pinned below — see the IAM Helper role above for the rationale.
       roleName: cdk.Fn.sub(`${refreshLambdaName}Role-\${AWS::Region}`),
       description: 'Execution role for the Policy Enforcer bulk refresh Lambda.',
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
@@ -234,6 +253,7 @@ export class PolicyEnforcerStack extends cdk.Stack {
         }),
       },
     });
+    (refreshRole.node.defaultChild as cdk.CfnElement).overrideLogicalId(`${refreshLambdaName}Role`);
 
     const refreshLambda = new lambda.CfnFunction(this, refreshLambdaName, {
       functionName: refreshLambdaName,
