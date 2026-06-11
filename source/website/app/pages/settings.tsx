@@ -9,8 +9,13 @@ import Box from '@cloudscape-design/components/box';
 import StatusIndicator from '@cloudscape-design/components/status-indicator';
 import Popover from '@cloudscape-design/components/popover';
 import { PAGE_SETTINGS } from '~/constants/app';
-import { AnalysisNotEnabledError, capabilityInsightsClient } from '~/clients/capability-insights-client';
+import {
+  AnalysisNotEnabledError,
+  PolicyEnforcerNotEnabledError,
+  capabilityInsightsClient,
+} from '~/clients/capability-insights-client';
 import { formatTimestamp } from '~/utils/time-utils';
+import { useFeatureFlags } from '~/hooks/use-feature-flags';
 import type { SyncMetadata } from '@capability-insights/shared/types/sync-metadata';
 import { ExecutionStatus } from '@capability-insights/shared/types/analysis';
 
@@ -31,6 +36,7 @@ const POLL_INTERVAL_MS = 5000;
 type AnalysisStatus = 'idle' | 'running' | 'success' | 'error' | 'not-enabled';
 
 export default function Settings() {
+  const { refresh: refreshFeatureFlags } = useFeatureFlags();
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
@@ -41,6 +47,12 @@ export default function Settings() {
   const [analysisError, setAnalysisError] = useState<string>('');
   const [analysisResult, setAnalysisResult] = useState<Record<string, unknown> | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [policyRefreshStatus, setPolicyRefreshStatus] = useState<
+    'idle' | 'loading' | 'success' | 'error' | 'not-enabled'
+  >('idle');
+  const [policyRefreshMessage, setPolicyRefreshMessage] = useState<string>('');
+  const [policyRefreshError, setPolicyRefreshError] = useState<string>('');
 
   useEffect(() => {
     capabilityInsightsClient.getLastSyncTime().then(setSyncMetadata);
@@ -77,10 +89,16 @@ export default function Settings() {
         if ('status' in result && result.status === ExecutionStatus.FAILED) {
           setAnalysisStatus('error');
           setAnalysisError(typeof result.error === 'string' ? result.error : 'Analysis failed');
+          // Surface the failed run's timestamp/status on the dashboard's
+          // "Last sync" popover without requiring a manual reload.
+          void refreshFeatureFlags();
           return;
         }
         setAnalysisResult(result as Record<string, unknown>);
         setAnalysisStatus('success');
+        // Refresh feature flags so the dashboard's "Last sync → Usage
+        // analysis" row reflects this run's new execution time immediately.
+        void refreshFeatureFlags();
       } catch (e) {
         setAnalysisStatus('error');
         setAnalysisError(e instanceof Error ? e.message : String(e));
@@ -104,6 +122,25 @@ export default function Settings() {
       }
       setAnalysisStatus('error');
       setAnalysisError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleRefreshAllPolicies = async () => {
+    setPolicyRefreshStatus('loading');
+    setPolicyRefreshMessage('');
+    setPolicyRefreshError('');
+    try {
+      const result = await capabilityInsightsClient.refreshAllPolicies();
+      setPolicyRefreshStatus('success');
+      setPolicyRefreshMessage(result.message);
+    } catch (e) {
+      if (e instanceof PolicyEnforcerNotEnabledError) {
+        setPolicyRefreshStatus('not-enabled');
+        setPolicyRefreshError(e.message);
+        return;
+      }
+      setPolicyRefreshStatus('error');
+      setPolicyRefreshError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -220,6 +257,55 @@ export default function Settings() {
                   <Box>Failed to run usage analysis.</Box>
                   <Box variant="small" color="text-body-secondary">
                     {analysisError}
+                  </Box>
+                </SpaceBetween>
+              </Alert>
+            )}
+          </SpaceBetween>
+        </Container>
+
+        <Container header={<Header variant="h2">Policy Enforcer</Header>}>
+          <SpaceBetween size="m">
+            <Alert type="info">
+              Policies refresh automatically once a week. Use the button below to refresh every policy now against the
+              latest catalog data.
+            </Alert>
+            <Box variant="small" color="text-body-secondary">
+              Runs in the background and may take a few minutes depending on how many policies you have. Each policy's
+              status updates as it completes.
+            </Box>
+            <Button
+              onClick={handleRefreshAllPolicies}
+              loading={policyRefreshStatus === 'loading'}
+              disabled={policyRefreshStatus === 'loading'}
+            >
+              Refresh all policies
+            </Button>
+            {policyRefreshStatus === 'success' && <Alert type="success">{policyRefreshMessage}</Alert>}
+            {policyRefreshStatus === 'not-enabled' && (
+              <Alert type="info" header="Policy Enforcer is not enabled">
+                <SpaceBetween size="xs">
+                  <Box>
+                    The optional Policy Enforcer stack is not deployed. To enable it, re-run deploy with{' '}
+                    <Box variant="code" display="inline">
+                      --enable-policy-enforcer
+                    </Box>
+                    .
+                  </Box>
+                  {policyRefreshError && (
+                    <Box variant="small" color="text-body-secondary">
+                      {policyRefreshError}
+                    </Box>
+                  )}
+                </SpaceBetween>
+              </Alert>
+            )}
+            {policyRefreshStatus === 'error' && (
+              <Alert type="error">
+                <SpaceBetween size="xs">
+                  <Box>Failed to refresh policies.</Box>
+                  <Box variant="small" color="text-body-secondary">
+                    {policyRefreshError}
                   </Box>
                 </SpaceBetween>
               </Alert>

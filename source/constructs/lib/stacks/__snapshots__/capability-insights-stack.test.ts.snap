@@ -15,6 +15,42 @@ exports[`CloudFormation template matches snapshot 1`] = `
         },
       ],
     },
+    "HasIamHelper": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "IamHelperLambdaName",
+            },
+            "",
+          ],
+        },
+      ],
+    },
+    "HasPolicyRefreshLambda": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "PolicyRefreshLambdaName",
+            },
+            "",
+          ],
+        },
+      ],
+    },
+    "HasPolicyTable": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "PolicyTableName",
+            },
+            "",
+          ],
+        },
+      ],
+    },
   },
   "Outputs": {
     "WebsiteBucketArn": {
@@ -72,6 +108,21 @@ exports[`CloudFormation template matches snapshot 1`] = `
     },
     "DeploymentAssetsBucketName": {
       "Description": "Name of S3 bucket where Capability Insights deployment assets will be located.",
+      "Type": "String",
+    },
+    "IamHelperLambdaName": {
+      "Default": "",
+      "Description": "Name of the Policy Enforcer IAM Helper Lambda. Leave empty if Policy Enforcer is not enabled.",
+      "Type": "String",
+    },
+    "PolicyRefreshLambdaName": {
+      "Default": "",
+      "Description": "Name of the Policy Enforcer bulk refresh Lambda. Leave empty if Policy Enforcer is not enabled.",
+      "Type": "String",
+    },
+    "PolicyTableName": {
+      "Default": "",
+      "Description": "Name of the Policy Enforcer DynamoDB table from the optional CapabilityInsightsPolicyEnforcer stack. Leave empty if Policy Enforcer is not enabled.",
       "Type": "String",
     },
     "PrivateVpcId": {
@@ -424,6 +475,15 @@ exports[`CloudFormation template matches snapshot 1`] = `
               "Ref": "ConfiguredCloudTrailBucketName",
             },
             "DATA_FETCH_LAMBDA_NAME": "CapabilityInsightsDataFetchLambda",
+            "IAM_HELPER_LAMBDA_NAME": {
+              "Ref": "IamHelperLambdaName",
+            },
+            "POLICY_REFRESH_LAMBDA_NAME": {
+              "Ref": "PolicyRefreshLambdaName",
+            },
+            "POLICY_TABLE_NAME": {
+              "Ref": "PolicyTableName",
+            },
             "WEBSITE_BUCKET_NAME": {
               "Ref": "capabilityinsightswebsite",
             },
@@ -431,6 +491,7 @@ exports[`CloudFormation template matches snapshot 1`] = `
         },
         "FunctionName": "CapabilityInsightsApiLambda",
         "Handler": "api-lambda-main.handler",
+        "MemorySize": 512,
         "Role": {
           "Fn::GetAtt": [
             "CapabilityInsightsApiLambdaRole",
@@ -547,6 +608,7 @@ exports[`CloudFormation template matches snapshot 1`] = `
                 {
                   "Action": [
                     "states:StartExecution",
+                    "states:ListExecutions",
                   ],
                   "Effect": "Allow",
                   "Resource": {
@@ -642,6 +704,102 @@ exports[`CloudFormation template matches snapshot 1`] = `
               "Version": "2012-10-17",
             },
             "PolicyName": "S3WebsiteBucketRead",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Query",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::If": [
+                      "HasPolicyTable",
+                      {
+                        "Fn::Sub": [
+                          "arn:\${AWS::Partition}:dynamodb:\${AWS::Region}:\${AWS::AccountId}:table/\${TableName}",
+                          {
+                            "TableName": {
+                              "Ref": "PolicyTableName",
+                            },
+                          },
+                        ],
+                      },
+                      {
+                        "Fn::Sub": "arn:\${AWS::Partition}:dynamodb:\${AWS::Region}:\${AWS::AccountId}:table/none",
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "PolicyEnforcerTableAccess",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "lambda:InvokeFunction",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::If": [
+                      "HasIamHelper",
+                      {
+                        "Fn::Sub": [
+                          "arn:\${AWS::Partition}:lambda:\${AWS::Region}:\${AWS::AccountId}:function:\${FunctionName}",
+                          {
+                            "FunctionName": {
+                              "Ref": "IamHelperLambdaName",
+                            },
+                          },
+                        ],
+                      },
+                      {
+                        "Fn::Sub": "arn:\${AWS::Partition}:lambda:\${AWS::Region}:\${AWS::AccountId}:function:none",
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "PolicyEnforcerIamHelperInvoke",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "lambda:InvokeFunction",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::If": [
+                      "HasPolicyRefreshLambda",
+                      {
+                        "Fn::Sub": [
+                          "arn:\${AWS::Partition}:lambda:\${AWS::Region}:\${AWS::AccountId}:function:\${FunctionName}",
+                          {
+                            "FunctionName": {
+                              "Ref": "PolicyRefreshLambdaName",
+                            },
+                          },
+                        ],
+                      },
+                      {
+                        "Fn::Sub": "arn:\${AWS::Partition}:lambda:\${AWS::Region}:\${AWS::AccountId}:function:none",
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "PolicyEnforcerBulkRefreshInvoke",
           },
         ],
         "RoleName": {

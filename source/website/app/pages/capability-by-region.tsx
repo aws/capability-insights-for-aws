@@ -6,6 +6,7 @@ import SpaceBetween from '@cloudscape-design/components/space-between';
 import Tabs from '@cloudscape-design/components/tabs';
 import Box from '@cloudscape-design/components/box';
 import Badge from '@cloudscape-design/components/badge';
+import Alert from '@cloudscape-design/components/alert';
 import ColumnLayout from '@cloudscape-design/components/column-layout';
 import Link from '@cloudscape-design/components/link';
 import Popover from '@cloudscape-design/components/popover';
@@ -22,6 +23,7 @@ import AvailabilityStatCard from '~/components/availability/availability-stat-ca
 import RegionalAvailabilityTypeBadge from '~/components/availability/regional-availability-type-badge';
 import { fromApiServices, fromCfnResources, fromProducts } from '~/mappers/regional-availability.mapper';
 import { formatTimestamp } from '~/utils/time-utils';
+import { useFeatureFlags } from '~/hooks/use-feature-flags';
 import type {
   ProductAvailability,
   ApiAvailability,
@@ -37,12 +39,47 @@ export function meta() {
 }
 
 export default function CapabilityByRegion() {
+  const { state: featureFlagsState, refresh: refreshFeatureFlags } = useFeatureFlags();
   const [regions, setRegions] = useState<Region[]>([]);
   const [productRows, setProductRows] = useState<ProductAvailability[]>([]);
   const [apiRows, setApiRows] = useState<ApiAvailability[]>([]);
   const [cfnRows, setCfnRows] = useState<CfnAvailability[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncMetadata, setSyncMetadata] = useState<SyncMetadata | null>(null);
+
+  // Resolve Usage Analysis state from feature flags. Until flags load we
+  // treat the feature as unavailable to avoid flashing a working toggle
+  // that would then disable. The toggle's three states map to:
+  //   - usageAnalysisAvailable=false → feature stack not deployed (banner)
+  //   - usageAnalysisAvailable=true && hasResults=false → enabled but no data yet
+  //   - usageAnalysisAvailable=true && hasResults=true → fully working
+  const usageAnalysisAvailable = featureFlagsState.status === 'ready' && featureFlagsState.flags.usageAnalysis.enabled;
+  const usageAnalysisHasResults =
+    featureFlagsState.status === 'ready' && featureFlagsState.flags.usageAnalysis.hasResults === true;
+
+  // Status indicator for the Usage Analysis sync row in the "Last sync"
+  // popover. Mirrors the catalog-data row but is sourced from the feature
+  // flags response (lastExecutionTime + lastExecutionStatus). Each sync is
+  // surfaced separately so failures of one don't hide the other.
+  const usageAnalysis = featureFlagsState.status === 'ready' ? featureFlagsState.flags.usageAnalysis : null;
+  const analysisStatusIndicator = useMemo(() => {
+    if (!usageAnalysis?.enabled) return null;
+    const { lastExecutionStatus, lastExecutionTime } = usageAnalysis;
+    if (!lastExecutionTime || !lastExecutionStatus) {
+      return <StatusIndicator type="pending">Not run yet</StatusIndicator>;
+    }
+    if (lastExecutionStatus === 'SUCCEEDED') {
+      return <StatusIndicator type="success">{formatTimestamp(lastExecutionTime)}</StatusIndicator>;
+    }
+    if (lastExecutionStatus === 'RUNNING') {
+      return <StatusIndicator type="in-progress">Running since {formatTimestamp(lastExecutionTime)}</StatusIndicator>;
+    }
+    return (
+      <StatusIndicator type="error">
+        {lastExecutionStatus} at {formatTimestamp(lastExecutionTime)}
+      </StatusIndicator>
+    );
+  }, [usageAnalysis]);
 
   // "My stuff" toggle state — persisted in URL search params
   const [searchParams, setSearchParams] = useSearchParams();
@@ -57,6 +94,10 @@ export default function CapabilityByRegion() {
   const [usedCfnRows, setUsedCfnRows] = useState<CfnAvailability[] | null>(null);
 
   useEffect(() => {
+    // Re-fetch feature flags on mount so the "Usage analysis" sync time and
+    // My Stuff state reflect any analysis run that happened since the app
+    // first loaded (the provider only fetches once at startup).
+    void refreshFeatureFlags();
     async function load() {
       const [r, p, a, c, syncMetadataResult] = await Promise.all([
         capabilityInsightsClient.listRegions(),
@@ -162,9 +203,34 @@ export default function CapabilityByRegion() {
           description="Browse regional availability data for AWS services, API operations, and CloudFormation resource types."
           actions={
             <SpaceBetween direction="horizontal" size="m" alignItems="center">
-              <Toggle onChange={({ detail }) => handleMyStuffToggle(detail.checked)} checked={myStuffEnabled}>
-                My stuff
-              </Toggle>
+              {usageAnalysisAvailable ? (
+                <SpaceBetween direction="horizontal" size="xs" alignItems="center">
+                  <Toggle onChange={({ detail }) => handleMyStuffToggle(detail.checked)} checked={myStuffEnabled}>
+                    My stuff
+                  </Toggle>
+                  {!usageAnalysisHasResults && (
+                    <Popover
+                      dismissButton={false}
+                      position="bottom"
+                      size="medium"
+                      triggerType="custom"
+                      content={
+                        <SpaceBetween size="xs">
+                          <Box variant="p">
+                            Usage Analysis is enabled but hasn&apos;t run yet, so there&apos;s no personalized data to
+                            show. Run an analysis from Settings to populate the &quot;My stuff&quot; view.
+                          </Box>
+                          <Link href="/settings" variant="primary" fontSize="body-s">
+                            Go to Settings
+                          </Link>
+                        </SpaceBetween>
+                      }
+                    >
+                      <StatusIndicator type="info">Run analysis to populate</StatusIndicator>
+                    </Popover>
+                  )}
+                </SpaceBetween>
+              ) : null}
               {syncMetadata?.errors?.length ? (
                 <Popover
                   dismissButton={false}
@@ -191,20 +257,31 @@ export default function CapabilityByRegion() {
                 <Popover
                   dismissButton={false}
                   position="bottom"
-                  size="small"
+                  size="medium"
                   content={
-                    <SpaceBetween size="xs">
-                      <StatusIndicator type="success">{formatTimestamp(syncMetadata.lastSyncTime)}</StatusIndicator>
-                      <Box variant="small" color="text-body-secondary">
-                        Data refreshes automatically every 24 hours.
-                      </Box>
+                    <SpaceBetween size="s">
+                      <SpaceBetween size="xxs">
+                        <Box variant="awsui-key-label">Catalog data</Box>
+                        <StatusIndicator type="success">{formatTimestamp(syncMetadata.lastSyncTime)}</StatusIndicator>
+                        <Box variant="small" color="text-body-secondary">
+                          Refreshes automatically every 24 hours.
+                        </Box>
+                      </SpaceBetween>
+                      {usageAnalysisAvailable && (
+                        <SpaceBetween size="xxs">
+                          <Box variant="awsui-key-label">Usage analysis</Box>
+                          {analysisStatusIndicator}
+                        </SpaceBetween>
+                      )}
                       <Link href="/settings" variant="primary" fontSize="body-s">
                         Sync manually
                       </Link>
                     </SpaceBetween>
                   }
                 >
-                  Last sync: {formatTimestamp(syncMetadata.lastSyncTime)}
+                  {myStuffEnabled && usageAnalysis?.lastExecutionTime
+                    ? `Last analysis: ${formatTimestamp(usageAnalysis.lastExecutionTime)}`
+                    : `Last sync: ${formatTimestamp(syncMetadata.lastSyncTime)}`}
                 </Popover>
               ) : undefined}
             </SpaceBetween>
@@ -215,6 +292,25 @@ export default function CapabilityByRegion() {
       }
     >
       <SpaceBetween size="l">
+        {featureFlagsState.status === 'ready' && !usageAnalysisAvailable && (
+          <Alert
+            type="info"
+            header="Personalization is not enabled"
+            action={
+              <Link
+                external
+                href="https://github.com/aws/capability-insights-for-aws#deploy-flags"
+                variant="primary"
+                fontSize="body-s"
+              >
+                Deployment docs
+              </Link>
+            }
+          >
+            The &quot;My stuff&quot; view filters this dashboard to services, APIs, and resources actually used in your
+            account. To enable it, redeploy with the <code>--enable-usage-analysis</code> flag.
+          </Alert>
+        )}
         <ColumnLayout columns={4} variant="text-grid">
           <AvailabilityStatCard
             label="Services &amp; features"

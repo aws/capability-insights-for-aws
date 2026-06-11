@@ -121,16 +121,17 @@ npm run deploy -- \
   --enable-usage-analysis
 ```
 
-| Flag                              | Description                                                                                                             |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `--private-vpc-id`                | VPC ID. Must have DNS resolution and DNS hostnames enabled.                                                             |
-| `--backend-subnet-id`             | Subnet without an internet gateway, used for Lambda compute.                                                            |
-| `--api-access-subnet-id`          | Subnet with an internet gateway, used for user access and the API Gateway VPC Endpoint.                                 |
-| `--deployment-assets-bucket-name` | S3 bucket where deployment assets (Lambda code zip) are stored.                                                         |
-| `--source-access-point-arn`       | S3 access point ARN for the capability data source (provided during onboarding).                                        |
-| `--source-folders`                | Comma-separated list of data sources to pull from (default: `public`). Include additional partitions if granted access. |
-| `--enable-usage-analysis`         | Deploy the opt-in Usage Analysis stack to enable personalization.                                                       |
-| `--cloudtrail-bucket`             | CloudTrail logs bucket used by the analyzer (only with `--enable-usage-analysis`). Auto-discovered if omitted.          |
+| Flag                              | Description                                                                                                                                                            |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--private-vpc-id`                | VPC ID. Must have DNS resolution and DNS hostnames enabled.                                                                                                            |
+| `--backend-subnet-id`             | Subnet without an internet gateway, used for Lambda compute. Must have a route to S3 via a Gateway VPC Endpoint, and to DynamoDB if `--enable-policy-enforcer` is set. |
+| `--api-access-subnet-id`          | Subnet with an internet gateway, used for user access and the API Gateway VPC Endpoint.                                                                                |
+| `--deployment-assets-bucket-name` | S3 bucket where deployment assets (Lambda code zip) are stored.                                                                                                        |
+| `--source-access-point-arn`       | S3 access point ARN for the capability data source (provided during onboarding).                                                                                       |
+| `--source-folders`                | Comma-separated list of data sources to pull from (default: `public`). Include additional partitions if granted access.                                                |
+| `--enable-usage-analysis`         | Deploy the opt-in Usage Analysis stack to enable personalization.                                                                                                      |
+| `--cloudtrail-bucket`             | CloudTrail logs bucket used by the analyzer (only with `--enable-usage-analysis`). Auto-discovered if omitted.                                                         |
+| `--enable-policy-enforcer`        | Deploy the opt-in Policy Enforcer stack to enable regional governance policy generation.                                                                               |
 
 #### Teardown
 
@@ -193,6 +194,25 @@ Then follow these steps:
    ```
 
 Once complete, see [Accessing the Website](#accessing-the-website).
+
+#### Optional: Usage Analysis (personalization)
+
+The "My stuff" personalization layer is an optional second stack
+(`template/usage-analysis.template.json`, also in `build-assets.zip`). At a
+high level the manual path is:
+
+1. Deploy `CapabilityInsightsUsageAnalysis` (params: `WebsiteBucketName`,
+   `WebsiteBucketArn`, `DeploymentAssetsBucketName`, `LambdaCodeZipPath`,
+   `CloudTrailBucketName`).
+2. Re-deploy the base stack with the new stack's outputs added as parameters
+   (`AnalysisStateMachineArn`, `CloudTrailAnalyzerLambdaName`,
+   `CloudFormationAnalyzerLambdaName`, `ConfiguredCloudTrailBucketName`).
+3. Trigger the first run from the UI (Settings → Run analysis), or start the
+   `AnalysisStateMachineArn` execution directly.
+
+The scripted path (`npm run deploy -- --enable-usage-analysis`) automates all
+of this; prefer it unless you're restricted to AWS CLI + CloudFormation only.
+The "My stuff" toggle becomes usable once the first run finishes.
 
 ## Accessing the Website
 
@@ -262,7 +282,7 @@ The personalized data is produced by analyzers that read your CloudTrail logs an
 
 ## Architecture
 
-This repository provides three CloudFormation stacks:
+This repository provides four CloudFormation stacks:
 
 ### Capability Insights Stack
 
@@ -306,6 +326,25 @@ Adds personalization. Deployed when you pass `--enable-usage-analysis` to `npm r
 | Glue Database / Table          | Schema over the CloudTrail bucket so the analyzer can run Athena queries                   |
 | Lake Formation Permissions     | Grants the analyzer role read access to the Glue database                                  |
 | EventBridge Rule               | Schedules the state machine to run daily (configurable via `AnalysisSchedule` parameter)   |
+
+### Policy Enforcer Stack (opt-in)
+
+Adds regional governance. Deployed when you pass `--enable-policy-enforcer` to `npm run deploy`. Exposes a REST API for creating named policies that select target regions and a computation mode (intersection or union), then generates an IAM Managed Policy or Service Control Policy whose `NotAction` allow-list is the set of capabilities available in those regions. The system creates and refreshes the policy resource on demand; **attaching it to roles or OUs is left to you**.
+
+Refresh runs synchronously when you `POST /policies`, `PUT /policies/:id`, or `POST /policies/:id/refresh` — there is no background schedule. Catalog data only changes when the DataFetch Lambda runs, so re-computing on its own cadence has no benefit.
+
+A generated allow-list can exceed AWS's per-document size limits. The feature handles this by splitting across multiple documents: IAM Managed Policies split at 6,144 characters each, and Service Control Policies split at 5,120 characters each across up to 5 documents (the AWS Organizations limit of 5 SCPs per target). Generation only fails when even 5 SCP documents cannot hold the allow-list — in which case, reduce scope (fewer regions, intersection mode) or use the IAM policy type.
+
+| Resource                       | Description                                                                                    |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| DynamoDB Table                 | Stores `PolicyConfiguration` records (regions, mode, exceptions, ARNs, refresh state)          |
+| GSI: AccountIdIndex            | Backs the listing route's account-scoped Query                                                 |
+| IAM Helper Lambda (out-of-VPC) | Performs `iam:*Policy*` mutations on behalf of the in-VPC API Lambda (IAM has no VPC endpoint) |
+| Scoped IAM permissions         | Helper Lambda's role grants `iam:*Policy*` only on `arn:...:policy/PolicyEnforcer-*`           |
+
+The `PolicyEnforcer-*` prefix on every managed policy this feature creates is **load-bearing** for the IAM scoping above — it limits the helper Lambda's blast radius to policies the feature itself owns.
+
+> **Subnet requirement**: when bringing your own VPC, the backend subnet (`--backend-subnet-id`) must be able to reach DynamoDB. Add a DynamoDB Gateway VPC Endpoint to that subnet's route table, or run the Sample Environment stack which provisions one for you.
 
 ### Package Structure
 
@@ -369,6 +408,18 @@ npm run dev:deploy -- --enable-usage-analysis
 ```
 
 `--enable-usage-analysis` auto-discovers the CloudTrail bucket from your account. Pass `--cloudtrail-bucket <name>` to override.
+
+### Upgrading an Existing Deployment
+
+`npm run dev:deploy` only updates the `CapabilityInsightsForAWS` and (if enabled) `CapabilityInsightsUsageAnalysis` stacks. It does **not** update the `CapabilityInsightsSampleEnvironment` stack, which provides the VPC, subnets, endpoints, and IAM the rest of the deployment depends on. A new version can change that stack (for example, adding a VPC endpoint), and skipping it leads to confusing runtime failures.
+
+```bash
+git pull
+npm run dev:setup    # reconciles CapabilityInsightsSampleEnvironment (no-op if unchanged)
+npm run dev:deploy   # then update Capability Insights itself (use the same flags as your initial deploy)
+```
+
+> If your initial deploy passed `--ec2-key-pair`, `--enable-usage-analysis`, or other flags, pass the same ones again — the scripts don't remember them between runs.
 
 ### Available Scripts
 

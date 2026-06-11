@@ -24,6 +24,32 @@ export const EnvironmentKey = {
    * to only the features directly observed in usage data.
    */
   INCLUDE_ALL_FEATURES_PER_SERVICE: 'INCLUDE_ALL_FEATURES_PER_SERVICE',
+  /**
+   * DynamoDB table name for the Policy Enforcer's `PolicyConfiguration`
+   * records. Set by the `CapabilityInsightsPolicyEnforcerStack` when the
+   * `--enable-policy-enforcer` deploy flag is used. Absent otherwise.
+   */
+  POLICY_TABLE_NAME: 'POLICY_TABLE_NAME',
+  /**
+   * Name of the out-of-VPC IAM Helper Lambda that performs `iam:*Policy*`
+   * mutations on behalf of the in-VPC API Lambda. IAM has no VPC endpoint,
+   * so the helper exists outside the VPC and is invoked over the Lambda VPC
+   * endpoint. Set by the Policy Enforcer stack.
+   */
+  IAM_HELPER_LAMBDA_NAME: 'IAM_HELPER_LAMBDA_NAME',
+  /**
+   * Name of the in-VPC bulk policy-refresh Lambda. Invoked asynchronously by
+   * `POST /policies/refresh-all` and on a weekly EventBridge schedule to
+   * recompute every policy against the latest catalog. Set by the Policy
+   * Enforcer stack; absent when the feature is not deployed.
+   */
+  POLICY_REFRESH_LAMBDA_NAME: 'POLICY_REFRESH_LAMBDA_NAME',
+  /**
+   * Optional override (in milliseconds) for the in-memory TTL of the
+   * `GET /features` response cache. Defaults to 60000 (60s) when unset or
+   * not a positive integer. Primarily useful for local testing/debugging.
+   */
+  FEATURES_CACHE_TTL_MS: 'FEATURES_CACHE_TTL_MS',
 } as const;
 
 export type EnvironmentKey = (typeof EnvironmentKey)[keyof typeof EnvironmentKey];

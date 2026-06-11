@@ -114,6 +114,18 @@ export class CapabilityInsightsSampleEnvironmentStack extends cdk.Stack {
       tags: [{ key: 'Name', value: vpcS3EndpointName }],
     });
 
+    // VPC Gateway Endpoint to DynamoDB — used by the Policy Enforcer feature
+    // so the API Lambda (in the private subnet without internet) can reach
+    // the PolicyConfiguration table. Free of charge.
+    const vpcDynamoEndpointName = `${vpcName}DynamoDbEndpoint`;
+    new ec2.CfnVPCEndpoint(this, vpcDynamoEndpointName, {
+      vpcId: this.vpc.attrVpcId,
+      vpcEndpointType: 'Gateway',
+      serviceName: cdk.Fn.sub('com.amazonaws.${AWS::Region}.dynamodb'),
+      routeTableIds: [publicRouteTable.attrRouteTableId, privateRouteTable.attrRouteTableId],
+      tags: [{ key: 'Name', value: vpcDynamoEndpointName }],
+    });
+
     const keypairName = props?.ec2KeyPair;
 
     // IAM role that the instances in VPC will use

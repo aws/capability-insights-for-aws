@@ -18,6 +18,24 @@ export interface CapabilityInsightsStackProps extends cdk.StackProps {
   cloudTrailAnalyzerLambdaName?: string;
   cloudFormationAnalyzerLambdaName?: string;
   configuredCloudTrailBucketName?: string;
+  /**
+   * Name of the DynamoDB table that stores Policy_Configuration records.
+   * Set when the `--enable-policy-enforcer` deploy flag was used; absent
+   * otherwise. When absent, the API Lambda receives no policy-enforcer
+   * permissions or env vars.
+   */
+  policyTableName?: string;
+  /**
+   * Name of the out-of-VPC IAM Helper Lambda for the Policy Enforcer.
+   * Companion to `policyTableName`.
+   */
+  iamHelperLambdaName?: string;
+  /**
+   * Name of the in-VPC bulk policy-refresh Lambda for the Policy Enforcer.
+   * Companion to `policyTableName`. The API Lambda invokes it asynchronously
+   * for `POST /policies/refresh-all`.
+   */
+  policyRefreshLambdaName?: string;
 }
 
 export enum CapabilityInsightsStackOutputs {
@@ -106,6 +124,37 @@ export class CapabilityInsightsStack extends cdk.Stack {
       description:
         'CloudTrail bucket configured at deploy time. Plumbed to the API Lambda so the UI can trigger analysis without re-supplying the bucket on every request.',
       default: props?.configuredCloudTrailBucketName ?? '',
+    });
+
+    const policyTableNameParameter = new cdk.CfnParameter(this, 'PolicyTableName', {
+      type: 'String',
+      description:
+        'Name of the Policy Enforcer DynamoDB table from the optional CapabilityInsightsPolicyEnforcer stack. Leave empty if Policy Enforcer is not enabled.',
+      default: props?.policyTableName ?? '',
+    });
+
+    const hasPolicyTable = new cdk.CfnCondition(this, 'HasPolicyTable', {
+      expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(policyTableNameParameter.valueAsString, '')),
+    });
+
+    const iamHelperLambdaNameParameter = new cdk.CfnParameter(this, 'IamHelperLambdaName', {
+      type: 'String',
+      description: 'Name of the Policy Enforcer IAM Helper Lambda. Leave empty if Policy Enforcer is not enabled.',
+      default: props?.iamHelperLambdaName ?? '',
+    });
+
+    const hasIamHelper = new cdk.CfnCondition(this, 'HasIamHelper', {
+      expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(iamHelperLambdaNameParameter.valueAsString, '')),
+    });
+
+    const policyRefreshLambdaNameParameter = new cdk.CfnParameter(this, 'PolicyRefreshLambdaName', {
+      type: 'String',
+      description: 'Name of the Policy Enforcer bulk refresh Lambda. Leave empty if Policy Enforcer is not enabled.',
+      default: props?.policyRefreshLambdaName ?? '',
+    });
+
+    const hasPolicyRefreshLambda = new cdk.CfnCondition(this, 'HasPolicyRefreshLambda', {
+      expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(policyRefreshLambdaNameParameter.valueAsString, '')),
     });
 
     const sourceFoldersParameter = new cdk.CfnParameter(this, 'SourceFolders', {
@@ -396,9 +445,11 @@ export class CapabilityInsightsStack extends cdk.Stack {
             Version: '2012-10-17',
             Statement: [
               {
-                // StartExecution operates on the state machine ARN.
+                // StartExecution and ListExecutions both operate on the
+                // state machine ARN. Grouped because the resource is the
+                // same and toggled by the same condition.
                 Effect: 'Allow',
-                Action: ['states:StartExecution'],
+                Action: ['states:StartExecution', 'states:ListExecutions'],
                 Resource: cdk.Fn.conditionIf(
                   hasAnalysisStateMachine.logicalId,
                   analysisStateMachineArnParameter.valueAsString,
@@ -459,6 +510,85 @@ export class CapabilityInsightsStack extends cdk.Stack {
             ],
           },
         },
+        {
+          // Policy Enforcer: read/write access to the PolicyConfiguration
+          // table. The composite (accountId, policyName) primary key gives
+          // us atomic uniqueness and listing without a GSI, so we only
+          // grant on the table ARN itself. Resource ARN references the
+          // optional PolicyTableName parameter; when the Policy Enforcer
+          // stack is not deployed, the parameter is empty and the
+          // constructed ARN matches no resource.
+          policyName: 'PolicyEnforcerTableAccess',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: [
+                  'dynamodb:GetItem',
+                  'dynamodb:PutItem',
+                  'dynamodb:UpdateItem',
+                  'dynamodb:DeleteItem',
+                  'dynamodb:Query',
+                ],
+                Resource: cdk.Fn.conditionIf(
+                  hasPolicyTable.logicalId,
+                  cdk.Fn.sub('arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}', {
+                    TableName: policyTableNameParameter.valueAsString,
+                  }),
+                  cdk.Fn.sub('arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/none'),
+                ),
+              },
+            ],
+          },
+        },
+        {
+          // Policy Enforcer: lambda:InvokeFunction on the IAM helper Lambda.
+          // The helper runs outside the VPC and performs all `iam:*Policy*`
+          // mutations on `PolicyEnforcer-*` policies. We don't grant IAM
+          // permissions directly to this in-VPC Lambda because IAM has no
+          // VPC endpoint — the call would time out anyway.
+          policyName: 'PolicyEnforcerIamHelperInvoke',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: 'lambda:InvokeFunction',
+                Resource: cdk.Fn.conditionIf(
+                  hasIamHelper.logicalId,
+                  cdk.Fn.sub('arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${FunctionName}', {
+                    FunctionName: iamHelperLambdaNameParameter.valueAsString,
+                  }),
+                  cdk.Fn.sub('arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:none'),
+                ),
+              },
+            ],
+          },
+        },
+        {
+          // Policy Enforcer: lambda:InvokeFunction on the bulk refresh Lambda.
+          // The API Lambda triggers `POST /policies/refresh-all` by invoking
+          // this Lambda asynchronously (the work can exceed API Gateway's 30s
+          // timeout). Scoped to the single refresh Lambda when deployed.
+          policyName: 'PolicyEnforcerBulkRefreshInvoke',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: 'lambda:InvokeFunction',
+                Resource: cdk.Fn.conditionIf(
+                  hasPolicyRefreshLambda.logicalId,
+                  cdk.Fn.sub('arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${FunctionName}', {
+                    FunctionName: policyRefreshLambdaNameParameter.valueAsString,
+                  }),
+                  cdk.Fn.sub('arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:none'),
+                ),
+              },
+            ],
+          },
+        },
       ],
     });
     const apiLambdaFunction = new lambda.CfnFunction(this, apiLambdaName, {
@@ -474,6 +604,7 @@ export class CapabilityInsightsStack extends cdk.Stack {
         securityGroupIds: [apiLambdaSecurityGroup.ref],
         subnetIds: [privateSubnetIdParameter.valueAsString],
       },
+      memorySize: 512,
       timeout: 60, // 1 min
       environment: {
         variables: {
@@ -483,6 +614,9 @@ export class CapabilityInsightsStack extends cdk.Stack {
           CLOUDFORMATION_ANALYZER_LAMBDA_NAME: cloudformationAnalyzerLambdaNameParameter.valueAsString,
           ANALYSIS_STATE_MACHINE_ARN: analysisStateMachineArnParameter.valueAsString,
           CONFIGURED_CLOUDTRAIL_BUCKET: configuredCloudTrailBucketParameter.valueAsString,
+          POLICY_TABLE_NAME: policyTableNameParameter.valueAsString,
+          IAM_HELPER_LAMBDA_NAME: iamHelperLambdaNameParameter.valueAsString,
+          POLICY_REFRESH_LAMBDA_NAME: policyRefreshLambdaNameParameter.valueAsString,
         },
       },
     });

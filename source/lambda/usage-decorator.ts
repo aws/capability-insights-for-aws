@@ -7,9 +7,10 @@ import type {
 import type { Product } from '@capability-insights/shared/types/capability/product';
 import type { UsedCapabilities } from '@capability-insights/shared/types/used-capabilities';
 import { CLOUDTRAIL_SERVICE_ALIASES } from './constants/cloudtrail-service-aliases';
+import { CatalogKey, usedCapabilitiesKey } from './constants/data-paths';
 import { EnvironmentKey, getOptionalEnv } from './constants/environment';
-import { Scope } from './constants/scope';
-import { UsageFilter, VALID_USAGE_FILTERS } from './constants/usage-filter';
+import { Scope } from '@capability-insights/shared/types/scope';
+import { UsageFilter, VALID_USAGE_FILTERS } from '@capability-insights/shared/types/usage-filter';
 import { S3BucketClient } from './services/s3-client';
 import type { CloudFormationUsage, CloudTrailUsage } from './types/usage';
 import { logger } from './util/logger';
@@ -65,9 +66,9 @@ export const handler = async (event: DecoratorEvent): Promise<Record<UsageFilter
 
   // Load master catalogs
   const [productsRaw, apisRaw, cfnResourcesRaw] = await Promise.all([
-    s3.getObject('data/json/products.json'),
-    s3.getObject('data/json/apis.json'),
-    s3.getObject('data/json/cfn_resources.json'),
+    s3.getObject(CatalogKey.PRODUCTS),
+    s3.getObject(CatalogKey.APIS),
+    s3.getObject(CatalogKey.CFN_RESOURCES),
   ]);
   const products = JSON.parse(productsRaw) as Product[];
   const apis = JSON.parse(apisRaw) as ApiService[];
@@ -115,7 +116,7 @@ export const handler = async (event: DecoratorEvent): Promise<Record<UsageFilter
   // Write all files in parallel
   await Promise.all(
     VALID_USAGE_FILTERS.map(mode => {
-      const key = `data/json/used-capabilities-${scope}-${mode}.json`;
+      const key = usedCapabilitiesKey(scope, mode);
       return s3.putObject(key, JSON.stringify(views[mode]), 'application/json');
     }),
   );
