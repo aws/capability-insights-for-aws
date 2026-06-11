@@ -5,6 +5,12 @@ import type { CfnResource } from '@capability-insights/shared/types/capability/c
 import type { SyncMetadata } from '@capability-insights/shared/types/sync-metadata';
 import type { UsedCapabilities } from '@capability-insights/shared/types/used-capabilities';
 import type { FeatureFlags } from '@capability-insights/shared/types/feature-flags';
+import type { PolicyConfiguration } from '@capability-insights/shared/types/policy-enforcer/policy-configuration';
+import type {
+  RefreshResponse,
+  CreatePolicyRequest,
+  PreviewResponse,
+} from '@capability-insights/shared/types/policy-enforcer/policy-api';
 import { AnalyzerType, ExecutionStatus } from '@capability-insights/shared/types/analysis';
 import { Scope } from '@capability-insights/shared/types/scope';
 import { s3Client } from './s3-client';
@@ -30,6 +36,27 @@ export class AnalysisNotEnabledError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'AnalysisNotEnabledError';
+  }
+}
+
+export class PolicyEnforcerNotEnabledError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PolicyEnforcerNotEnabledError';
+  }
+}
+
+export class PolicyNameConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PolicyNameConflictError';
+  }
+}
+
+export class PolicyValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PolicyValidationError';
   }
 }
 
@@ -154,6 +181,113 @@ export class CapabilityInsightsClient {
     } catch {
       return null;
     }
+  }
+
+  async refreshAllPolicies(): Promise<{ message: string; total: number }> {
+    const baseUrl = await this.getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/policies/refresh-all`, { method: 'POST' });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      let parsedMessage = '';
+      try {
+        const parsed = JSON.parse(text) as { error?: string; message?: string };
+        parsedMessage = parsed.message || parsed.error || '';
+      } catch {
+        // text wasn't JSON; fall through
+      }
+      if (res.status === 503) {
+        throw new PolicyEnforcerNotEnabledError(
+          parsedMessage || 'Policy Enforcer is not enabled. Re-run deploy with --enable-policy-enforcer.',
+        );
+      }
+      throw new Error(`Refresh-all request failed: ${res.status}${parsedMessage ? ` ${parsedMessage}` : ''}`);
+    }
+    return (await res.json()) as { message: string; total: number };
+  }
+
+  /**
+   * Lists all policies.
+   */
+  async listPolicies(params?: {
+    search?: string;
+    tagKey?: string;
+    tagValue?: string;
+    status?: string;
+  }): Promise<PolicyConfiguration[]> {
+    const baseUrl = await this.getApiBaseUrl();
+    const url = new URL(`${baseUrl}/policies`);
+    if (params?.search) url.searchParams.set('search', params.search);
+    if (params?.tagKey) url.searchParams.set('tagKey', params.tagKey);
+    if (params?.tagValue) url.searchParams.set('tagValue', params.tagValue);
+    if (params?.status) url.searchParams.set('status', params.status);
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(`List policies failed: ${res.status}`);
+    const data = (await res.json()) as { policies: PolicyConfiguration[] };
+    return data.policies;
+  }
+
+  async refreshPolicy(policyName: string): Promise<RefreshResponse> {
+    const baseUrl = await this.getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/policies/${encodeURIComponent(policyName)}/refresh`, { method: 'POST' });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Refresh failed: ${res.status}${text ? ` ${text}` : ''}`);
+    }
+    return (await res.json()) as RefreshResponse;
+  }
+
+  /**
+   * Creates a new policy. Returns the created policy configuration.
+   * Throws on 400 (validation) or 409 (name conflict).
+   */
+  async createPolicy(
+    request: CreatePolicyRequest,
+  ): Promise<{ policy: PolicyConfiguration; refresh?: RefreshResponse }> {
+    const baseUrl = await this.getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/policies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      let parsedMessage = '';
+      try {
+        const parsed = JSON.parse(text) as { error?: string; message?: string };
+        parsedMessage = parsed.message || parsed.error || '';
+      } catch {
+        // not JSON
+      }
+      if (res.status === 409) {
+        throw new PolicyNameConflictError(parsedMessage || 'A policy with this name already exists.');
+      }
+      if (res.status === 400) {
+        throw new PolicyValidationError(parsedMessage || 'Invalid policy configuration.');
+      }
+      throw new Error(`Create policy failed: ${res.status}${parsedMessage ? ` ${parsedMessage}` : ''}`);
+    }
+    return (await res.json()) as { policy: PolicyConfiguration; refresh?: RefreshResponse };
+  }
+
+  async getPolicy(policyName: string): Promise<PolicyConfiguration> {
+    const baseUrl = await this.getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/policies/${encodeURIComponent(policyName)}`);
+    if (!res.ok) throw new Error(`Get policy failed: ${res.status}`);
+    const data = (await res.json()) as { policy: PolicyConfiguration };
+    return data.policy;
+  }
+
+  async previewPolicy(policyName: string): Promise<PreviewResponse> {
+    const baseUrl = await this.getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/policies/${encodeURIComponent(policyName)}/preview`);
+    if (!res.ok) throw new Error(`Preview failed: ${res.status}`);
+    return (await res.json()) as PreviewResponse;
+  }
+
+  async deletePolicy(policyName: string): Promise<void> {
+    const baseUrl = await this.getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/policies/${encodeURIComponent(policyName)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
   }
 
   /**
