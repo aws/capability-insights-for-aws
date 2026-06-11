@@ -86,6 +86,41 @@ exports[`CloudFormation template matches snapshot 1`] = `
       },
       "Type": "AWS::EC2::VPC",
     },
+    "CapabilityInsightsSampleEnvironmentVpcDynamoDbEndpoint": {
+      "Properties": {
+        "RouteTableIds": [
+          {
+            "Fn::GetAtt": [
+              "CapabilityInsightsSampleEnvironmentVpcPublicRouteTable",
+              "RouteTableId",
+            ],
+          },
+          {
+            "Fn::GetAtt": [
+              "CapabilityInsightsSampleEnvironmentVpcPrivateRouteTable",
+              "RouteTableId",
+            ],
+          },
+        ],
+        "ServiceName": {
+          "Fn::Sub": "com.amazonaws.\${AWS::Region}.dynamodb",
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CapabilityInsightsSampleEnvironmentVpcDynamoDbEndpoint",
+          },
+        ],
+        "VpcEndpointType": "Gateway",
+        "VpcId": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsSampleEnvironmentVpc",
+            "VpcId",
+          ],
+        },
+      },
+      "Type": "AWS::EC2::VPCEndpoint",
+    },
     "CapabilityInsightsSampleEnvironmentVpcIGW": {
       "Properties": {
         "Tags": [

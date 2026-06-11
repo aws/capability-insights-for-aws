@@ -22,6 +22,8 @@ Deploy options (pass as flags or omit to be prompted):
   --enable-usage-analysis                Deploy the Usage Analysis stack
   --cloudtrail-bucket <name>             S3 bucket containing CloudTrail logs (for usage analysis,
                                          auto-discovered from your account's CloudTrail trails if omitted)
+  --enable-policy-enforcer               Deploy the Policy Enforcer stack (regional governance
+                                         policies generated from the catalog)
   -y, --yes                              Skip confirmation prompts
 
 Examples:
@@ -58,8 +60,56 @@ prompt_if_empty() {
   fi
 }
 
+# Run `aws cloudformation deploy` and react to the real outcome.
+#
+# `aws cloudformation deploy` exits non-zero when there is nothing to deploy
+# ("No changes to deploy"), which is benign, but it also exits non-zero on a
+# genuine failure. The previous `|| true` swallowed both cases and let the
+# script print a misleading success message. This helper distinguishes them:
+# a "no changes" exit is treated as success, anything else prints the failing
+# stack events and aborts the deploy.
+#
+# Usage: deploy_stack_checked <stack-name> <aws cloudformation deploy args...>
+deploy_stack_checked() {
+  local stack_name=$1
+  shift
+
+  local log_file deploy_exit
+  log_file=$(mktemp)
+  # Ensure the temp file is removed even if the script is interrupted
+  # (Ctrl+C, kill) while the deploy is streaming.
+  trap 'rm -f "$log_file"' RETURN INT TERM
+  # Stream progress live (tee) while capturing output for inspection. Use
+  # PIPESTATUS to read aws's exit code rather than tee's.
+  aws cloudformation deploy --stack-name "$stack_name" "$@" 2>&1 | tee "$log_file"
+  deploy_exit=${PIPESTATUS[0]}
+
+  if [[ $deploy_exit -eq 0 ]]; then
+    return 0
+  fi
+
+  # "No changes" variants are benign. `aws cloudformation deploy` surfaces
+  # this a few different ways depending on whether it went through a direct
+  # deploy or changeset creation.
+  if grep -qiE "No changes to deploy|No updates are to be performed|didn't contain changes|The submitted information didn't contain changes" "$log_file"; then
+    return 0
+  fi
+
+  echo "✗ Stack '$stack_name' failed to deploy."
+  echo "Recent failed events:"
+  aws cloudformation describe-stack-events \
+    --stack-name "$stack_name" \
+    --query "StackEvents[?ResourceStatus=='CREATE_FAILED'||ResourceStatus=='UPDATE_FAILED'||ResourceStatus=='ROLLBACK_IN_PROGRESS'].[LogicalResourceId,ResourceStatusReason]" \
+    --output table 2>/dev/null | head -40
+  echo ""
+  echo "If the stack is in ROLLBACK_COMPLETE it must be deleted before retrying:"
+  echo "  aws cloudformation delete-stack --stack-name $stack_name"
+  rm -f "$log_file"
+  exit 1
+}
+
 cmd_deploy() {
-  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders="" cloudtrail_bucket="" enable_usage_analysis="" auto_approve=""
+  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders="" cloudtrail_bucket="" enable_usage_analysis="" enable_policy_enforcer="" auto_approve=""
 
   while [[ $# -gt 0 ]]; do
     case $1 in
@@ -71,6 +121,7 @@ cmd_deploy() {
       --source-folders)                  source_folders="$2"; shift 2 ;;
       --cloudtrail-bucket)               cloudtrail_bucket="$2"; shift 2 ;;
       --enable-usage-analysis)           enable_usage_analysis="true"; shift ;;
+      --enable-policy-enforcer)          enable_policy_enforcer="true"; shift ;;
       -y|--yes)                          auto_approve="true"; shift ;;
       *) echo "Unknown option: $1"; usage ;;
     esac
@@ -182,9 +233,8 @@ cmd_deploy() {
 
   echo "── Deploying Usage Analysis stack ──"
   if [[ "$enable_usage_analysis" == "true" ]]; then
-    aws cloudformation deploy \
+    deploy_stack_checked CapabilityInsightsUsageAnalysis \
       --template-file "$SCRIPT_DIR/dist/template/usage-analysis.template.json" \
-      --stack-name CapabilityInsightsUsageAnalysis \
       --parameter-overrides \
         WebsiteBucketName="$website_bucket" \
         WebsiteBucketArn="$website_bucket_arn" \
@@ -192,7 +242,7 @@ cmd_deploy() {
         LambdaCodeZipPath="$lambda_key" \
         CloudTrailBucketName="${cloudtrail_bucket:-}" \
       --capabilities CAPABILITY_NAMED_IAM \
-      --no-cli-pager || true
+      --no-cli-pager
     echo "  ✓ Usage Analysis stack deployed."
 
     # Get outputs from Usage Analysis stack
@@ -232,9 +282,8 @@ cmd_deploy() {
 
     if [[ -n "$analysis_state_machine_arn" && -n "$cloudtrail_analyzer_lambda_name" && -n "$cloudformation_analyzer_lambda_name" ]]; then
       echo "── Updating Insights stack with Usage Analysis outputs ──"
-      aws cloudformation deploy \
+      deploy_stack_checked CapabilityInsightsForAWS \
         --template-file "$SCRIPT_DIR/dist/template/capability-insights.template.json" \
-        --stack-name CapabilityInsightsForAWS \
         --parameter-overrides \
           PrivateVpcId="$private_vpc_id" \
           BackendSubnetId="$backend_subnet_id" \
@@ -248,11 +297,112 @@ cmd_deploy() {
           CloudFormationAnalyzerLambdaName="$cloudformation_analyzer_lambda_name" \
           ConfiguredCloudTrailBucketName="$cloudtrail_bucket" \
         --capabilities CAPABILITY_NAMED_IAM \
-        --no-cli-pager || true
+        --no-cli-pager
       echo "  ✓ Insights stack updated with analysis integration."
+    fi
+
+    # Auto-trigger the first account analysis so opting in via
+    # --enable-usage-analysis produces personalized data without the user
+    # having to discover the Settings → "Run analysis" button. Mirrors the
+    # post-deploy data sync below. Fire-and-forget: the state machine runs
+    # asynchronously (analyzers + decorator take several minutes), and the
+    # dashboard surfaces progress via the "Last analysis" sync indicator.
+    if [[ -n "$analysis_state_machine_arn" ]]; then
+      echo "── Triggering initial account analysis ──"
+      local analysis_input
+      analysis_input=$(cat <<JSON
+{
+  "scope": "account",
+  "accounts": ["${ACCOUNT_ID}"],
+  "analyzers": ["cloudtrail", "cloudformation"],
+  "cloudTrailBucket": "${cloudtrail_bucket:-}",
+  "cloudTrailPrefix": "AWSLogs/",
+  "daysToScan": 30,
+  "websiteBucket": "${website_bucket}",
+  "cloudtrailAnalyzerLambda": "${cloudtrail_analyzer_lambda_name:-}",
+  "cloudformationAnalyzerLambda": "${cloudformation_analyzer_lambda_name:-}"
+}
+JSON
+)
+      if aws stepfunctions start-execution \
+        --state-machine-arn "$analysis_state_machine_arn" \
+        --input "$analysis_input" > /dev/null 2>&1; then
+        echo "  ✓ Account analysis started (runs in the background; check the dashboard's \"Last analysis\" indicator)."
+      else
+        echo "  ⚠ Could not auto-start analysis. Trigger it manually from Settings → Run analysis."
+      fi
     fi
   else
     echo "  Skipped (pass --enable-usage-analysis to deploy)."
+  fi
+
+  echo "── Deploying Policy Enforcer stack ──"
+  local policy_table_name=""
+  if [[ "$enable_policy_enforcer" == "true" ]]; then
+    deploy_stack_checked CapabilityInsightsPolicyEnforcer \
+      --template-file "$SCRIPT_DIR/dist/template/policy-enforcer.template.json" \
+      --parameter-overrides \
+        DeploymentAssetsBucketName="$deployment_assets_bucket_name" \
+        LambdaCodeZipPath="$lambda_key" \
+        PrivateVpcId="$private_vpc_id" \
+        BackendSubnetId="$backend_subnet_id" \
+        WebsiteBucketName="$website_bucket" \
+      --capabilities CAPABILITY_NAMED_IAM \
+      --no-cli-pager
+    echo "  ✓ Policy Enforcer stack deployed."
+
+    policy_table_name=$(aws cloudformation describe-stacks \
+      --stack-name CapabilityInsightsPolicyEnforcer \
+      --query "Stacks[0].Outputs[?OutputKey=='PolicyTableName'].OutputValue" --output text 2>/dev/null || echo "")
+    local iam_helper_lambda_name policy_refresh_lambda_name
+    iam_helper_lambda_name=$(aws cloudformation describe-stacks \
+      --stack-name CapabilityInsightsPolicyEnforcer \
+      --query "Stacks[0].Outputs[?OutputKey=='IamHelperLambdaName'].OutputValue" --output text 2>/dev/null || echo "")
+    policy_refresh_lambda_name=$(aws cloudformation describe-stacks \
+      --stack-name CapabilityInsightsPolicyEnforcer \
+      --query "Stacks[0].Outputs[?OutputKey=='PolicyRefreshLambdaName'].OutputValue" --output text 2>/dev/null || echo "")
+
+    # Force-update both Lambdas' code (CFN may skip if template is unchanged)
+    if [[ -n "$iam_helper_lambda_name" ]]; then
+      aws lambda update-function-code \
+        --function-name "$iam_helper_lambda_name" \
+        --s3-bucket "$deployment_assets_bucket_name" \
+        --s3-key "$lambda_key" > /dev/null 2>&1 || true
+    fi
+    if [[ -n "$policy_refresh_lambda_name" ]]; then
+      aws lambda update-function-code \
+        --function-name "$policy_refresh_lambda_name" \
+        --s3-bucket "$deployment_assets_bucket_name" \
+        --s3-key "$lambda_key" > /dev/null 2>&1 || true
+    fi
+
+    if [[ -n "$policy_table_name" ]]; then
+      echo "── Updating Insights stack with Policy Enforcer outputs ──"
+      # Re-run the main stack deploy with PolicyTableName plus any
+      # already-discovered Usage Analysis outputs so we don't lose them.
+      deploy_stack_checked CapabilityInsightsForAWS \
+        --template-file "$SCRIPT_DIR/dist/template/capability-insights.template.json" \
+        --parameter-overrides \
+          PrivateVpcId="$private_vpc_id" \
+          BackendSubnetId="$backend_subnet_id" \
+          ApiAccessSubnetId="$api_access_subnet_id" \
+          DeploymentAssetsBucketName="$deployment_assets_bucket_name" \
+          DeploymentAssetsBucketApiLambdaFunctionCodeZipPath="$lambda_key" \
+          SourceAccessPointArn="$source_access_point_arn" \
+          SourceFolders="$source_folders" \
+          AnalysisStateMachineArn="${analysis_state_machine_arn:-}" \
+          CloudTrailAnalyzerLambdaName="${cloudtrail_analyzer_lambda_name:-}" \
+          CloudFormationAnalyzerLambdaName="${cloudformation_analyzer_lambda_name:-}" \
+          ConfiguredCloudTrailBucketName="${cloudtrail_bucket:-}" \
+          PolicyTableName="$policy_table_name" \
+          IamHelperLambdaName="${iam_helper_lambda_name:-}" \
+          PolicyRefreshLambdaName="${policy_refresh_lambda_name:-}" \
+        --capabilities CAPABILITY_NAMED_IAM \
+        --no-cli-pager
+      echo "  ✓ Insights stack updated with Policy Enforcer integration."
+    fi
+  else
+    echo "  Skipped (pass --enable-policy-enforcer to deploy)."
   fi
 
   echo "── Syncing capability data ──"
@@ -272,13 +422,18 @@ cmd_teardown() {
   local website_bucket="capability-insights-website-${ACCOUNT_ID}-${REGION}"
 
   if [[ "$AUTO_APPROVE" != "true" ]]; then
-    echo "This will delete the CapabilityInsightsForAWS and CapabilityInsightsUsageAnalysis stacks and empty the website bucket."
+    echo "This will delete the CapabilityInsightsForAWS, CapabilityInsightsUsageAnalysis, and CapabilityInsightsPolicyEnforcer stacks and empty the website bucket."
     read -rp "Continue? (y/N): " confirm
     [[ "$confirm" =~ ^[Yy]$ ]] || exit 0
   fi
 
   echo "── Emptying website bucket ──"
   aws s3 rm "s3://$website_bucket" --recursive || true
+
+  echo "── Destroying Policy Enforcer stack ──"
+  aws cloudformation delete-stack --stack-name CapabilityInsightsPolicyEnforcer 2>/dev/null || true
+  aws cloudformation wait stack-delete-complete --stack-name CapabilityInsightsPolicyEnforcer 2>/dev/null || true
+  echo "  ✓ Policy Enforcer stack deleted."
 
   echo "── Destroying Usage Analysis stack ──"
   aws cloudformation delete-stack --stack-name CapabilityInsightsUsageAnalysis 2>/dev/null || true

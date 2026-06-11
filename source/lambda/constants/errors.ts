@@ -15,6 +15,18 @@ export const ErrorResponse = {
     body: JSON.stringify({ error: 'Not Found', message }),
   }),
 
+  conflict: (message: string): APIGatewayProxyResult => ({
+    statusCode: StatusCode.CONFLICT,
+    headers: corsHeaders,
+    body: JSON.stringify({ error: 'Conflict', message }),
+  }),
+
+  serviceUnavailable: (message: string): APIGatewayProxyResult => ({
+    statusCode: StatusCode.SERVICE_UNAVAILABLE,
+    headers: corsHeaders,
+    body: JSON.stringify({ error: 'Service Unavailable', message }),
+  }),
+
   internalServerError: (message: string): APIGatewayProxyResult => ({
     statusCode: StatusCode.INTERNAL_SERVER_ERROR,
     headers: corsHeaders,

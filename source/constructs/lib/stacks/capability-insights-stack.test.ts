@@ -49,7 +49,7 @@ describe('API Lambda role', () => {
             Statement: [
               Match.objectLike({
                 Effect: 'Allow',
-                Action: ['states:StartExecution'],
+                Action: ['states:StartExecution', 'states:ListExecutions'],
               }),
               Match.objectLike({
                 Effect: 'Allow',
