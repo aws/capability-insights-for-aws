@@ -29,6 +29,7 @@ The dashboard covers:
 - **API operations** — individual API action availability per region for each AWS service
 - **CloudFormation resource types** — which resource types are supported in each region
 - **Personalized usage (opt-in)** — a "My Stuff" view that filters everything down to services, APIs, and resources actually used in your account, derived from CloudTrail and CloudFormation
+- **Regional governance policies (opt-in)** — generate IAM Managed Policies and Service Control Policies that deny capabilities not available in your chosen regions
 
 ![Dashboard overview](docs/images/dashboard-overview.png)
 
@@ -41,6 +42,10 @@ The solution deploys entirely within your VPC so that all data remains within yo
 The solution deploys a static website, REST API, and Lambda functions into your VPC. Personalization is provided by an opt-in second stack that adds a Step Functions state machine and analyzer Lambdas that read your account's CloudTrail logs and CloudFormation stacks.
 
 ![Usage Analysis architecture](docs/images/personalization-architecture.png)
+
+A separate opt-in stack adds regional governance: a REST API and Lambdas that generate IAM Managed Policies or Service Control Policies whose allow-lists reflect what's available in your chosen regions, derived from the same capability catalog the dashboard uses.
+
+![Policy Enforcer architecture](docs/images/policy-enforcer-architecture.png)
 
 For a detailed breakdown of all resources, see [Architecture](#architecture).
 
@@ -214,6 +219,27 @@ The scripted path (`npm run deploy -- --enable-usage-analysis`) automates all
 of this; prefer it unless you're restricted to AWS CLI + CloudFormation only.
 The "My stuff" toggle becomes usable once the first run finishes.
 
+#### Optional: Policy Enforcer (regional governance)
+
+The Policy Enforcer is an optional third stack
+(`template/policy-enforcer.template.json`, also in `build-assets.zip`) that
+generates IAM Managed Policies or Service Control Policies whose `NotAction`
+allow-list reflects the capabilities available in your chosen regions. The
+manual path:
+
+1. Deploy `CapabilityInsightsPolicyEnforcer` (params: `PrivateVpcId`,
+   `BackendSubnetId`, `WebsiteBucketName`, `DeploymentAssetsBucketName`,
+   `LambdaCodeZipPath`).
+2. Re-deploy the base stack with the new stack's outputs added as parameters
+   (`PolicyTableName`, `IamHelperLambdaName`, `PolicyRefreshLambdaName`).
+3. Open the dashboard's Policy Enforcer page (or `POST /policies`) to create
+   your first policy.
+
+The scripted path (`npm run deploy -- --enable-policy-enforcer`) automates all
+of this. The backend subnet must be able to reach DynamoDB via a Gateway VPC
+Endpoint — the Sample Environment stack provisions one for you, or add one to
+the route table when bringing your own VPC.
+
 ## Accessing the Website
 
 The website is hosted on S3 and accessible only from within your VPC. After deployment, navigate to:
@@ -260,7 +286,7 @@ Click the Export button to download the current view as JSON or CSV. This is use
 
 ### Navigation and Settings
 
-Open the side navigation to switch between the Capability by Region dashboard and Settings. The Settings page lets you trigger a manual data refresh and, when personalization is enabled, run usage analysis on demand.
+Open the side navigation to switch between the Capability by Region dashboard, the Policy Enforcer page (when deployed), and Settings. The Settings page lets you trigger a manual data refresh and, when the optional stacks are deployed, run usage analysis on demand and bulk-refresh every Policy Enforcer policy against the latest catalog.
 
 ![Navigation](docs/images/user-guide-navigation.png)
 
@@ -279,6 +305,24 @@ The CloudFormation tab also gains a **Stack** filter, letting you narrow resourc
 The personalized data is produced by analyzers that read your CloudTrail logs and active CloudFormation stacks, then written back to the website bucket as a personalized data set. The analysis runs on a daily schedule. You can also trigger it on demand from the Settings page using the **Run usage analysis** button. The page shows progress and result counts when the run completes; refresh the dashboard afterwards to see the updated personalization.
 
 ![Run usage analysis](docs/images/user-guide-run-analysis.png)
+
+### Generating regional governance policies (opt-in)
+
+If you deployed with `--enable-policy-enforcer`, the side navigation gains a **Policy Enforcer** entry. Use it to generate IAM Managed Policies or Service Control Policies that deny services and APIs unavailable in your target regions — useful when you want to confine workloads to a primary region without hand-curating allow-lists.
+
+![Policy Enforcer list](docs/images/user-guide-policy-enforcer-list.png)
+
+Click **Create policy** and provide a name, an optional description and tags, the target regions, a computation mode (intersection or union), and the policy type (IAM Managed Policy or Service Control Policy). Intersection produces an allow-list of capabilities available in _all_ selected regions; union produces one available in _any_ selected region.
+
+![Create Policy form](docs/images/user-guide-policy-enforcer-create.png)
+
+Once created, the policy detail page shows the configuration, refresh status, a preview of the generated allow-list, and the Policy ARNs of the resulting IAM Managed Policies. Service Control Policies that overflow a single 5,120-character document are split across multiple managed policies (Part 1, Part 2, etc.) up to the AWS Organizations limit of 5 per target — copy each document into the OU or account where you want to attach it.
+
+![Policy detail](docs/images/user-guide-policy-enforcer-detail.png)
+
+**Attaching the result is left to you**: for IAM-typed policies, attach `arn:...:policy/PolicyEnforcer-<name>` to the roles or users that should be governed; for SCP-typed policies, copy each document and attach it to the target OU or account in AWS Organizations.
+
+To re-run every policy against a fresh catalog (e.g. after a daily DataFetch update introduces new APIs), use **Refresh all policies** on the Settings page. Individual policies also refresh whenever you re-save them.
 
 ## Architecture
 
