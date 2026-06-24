@@ -30,6 +30,7 @@ The dashboard covers:
 - **CloudFormation resource types** — which resource types are supported in each region
 - **Personalized usage (opt-in)** — a "My Stuff" view that filters everything down to services, APIs, and resources actually used in your account, derived from CloudTrail and CloudFormation
 - **Regional governance policies (opt-in)** — generate IAM Managed Policies and Service Control Policies that deny capabilities not available in your chosen regions
+- **Conversational assistant (opt-in)** — a chat drawer that answers availability, comparison, and usage questions in natural language; the model interprets intent while the answer is computed deterministically from the same capability catalog
 
 ![Dashboard overview](docs/images/dashboard-overview.png)
 
@@ -46,6 +47,10 @@ The solution deploys a static website, REST API, and Lambda functions into your 
 A separate opt-in stack adds regional governance: a REST API and Lambdas that generate IAM Managed Policies or Service Control Policies whose allow-lists reflect what's available in your chosen regions, derived from the same capability catalog the dashboard uses.
 
 ![Policy Enforcer architecture](docs/images/policy-enforcer-architecture.png)
+
+A further opt-in stack adds a conversational assistant: an out-of-VPC Lambda runs a Bedrock tool-use loop (Amazon Bedrock has no VPC endpoint), and the in-VPC API Lambda forwards chat requests to it. The model only interprets intent and chooses query parameters — counts, rankings, and region diffs are computed in code against the same capability catalog the dashboard uses, so answers cannot be hallucinated. The assistant performs no mutations.
+
+![Conversational assistant architecture](docs/images/conversational-assistant-architecture.png)
 
 For a detailed breakdown of all resources, see [Architecture](#architecture).
 
@@ -137,6 +142,8 @@ npm run deploy -- \
 | `--enable-usage-analysis`         | Deploy the opt-in Usage Analysis stack to enable personalization.                                                                                                      |
 | `--cloudtrail-bucket`             | CloudTrail logs bucket used by the analyzer (only with `--enable-usage-analysis`). Auto-discovered if omitted.                                                         |
 | `--enable-policy-enforcer`        | Deploy the opt-in Policy Enforcer stack to enable regional governance policy generation.                                                                               |
+| `--enable-chat`                   | Deploy the opt-in Chat assistant stack. Requires Amazon Bedrock with Claude model access enabled in the deployment region.                                             |
+| `--bedrock-model-id`              | Bedrock model or cross-region inference profile id for chat (only with `--enable-chat`). Defaults to `us.anthropic.claude-haiku-4-5-20251001-v1:0`.                    |
 
 #### Teardown
 
@@ -240,6 +247,37 @@ of this. The backend subnet must be able to reach DynamoDB via a Gateway VPC
 Endpoint — the Sample Environment stack provisions one for you, or add one to
 the route table when bringing your own VPC.
 
+#### Optional: Chat assistant (conversational interface)
+
+> **Prerequisite — enable Bedrock model access first.** This is an account-level,
+> per-region setting the deployment **cannot** turn on for you: the stack grants
+> the Lambda permission to _call_ Bedrock, but your account must separately be
+> granted access to the Claude model in the deployment region (Bedrock console →
+> **Model access** → enable the Anthropic Claude model, accepting the use-case
+> agreement if prompted). If it isn't enabled, the Chat stack still deploys
+> cleanly but every chat request **fails at runtime** with an access-denied
+> error. The scripted deploy runs a preflight check and warns when access is
+> missing. Default model: `us.anthropic.claude-haiku-4-5-20251001-v1:0`
+> (override with `--bedrock-model-id`).
+
+The conversational assistant is an optional stack
+(`template/chat.template.json`, also in `build-assets.zip`) that runs a
+Bedrock-backed agent out-of-VPC (Amazon Bedrock has no VPC endpoint). The
+manual path:
+
+1. Deploy `CapabilityInsightsChat` (params: `DeploymentAssetsBucketName`,
+   `LambdaCodeZipPath`, `WebsiteBucketName`, `PolicyTableName` —
+   optional, enables the read-only `preview_policy` tool when set —
+   and `BedrockModelId`).
+2. Re-deploy the base stack with the new stack's `ChatLambdaName` output added
+   as a parameter, which switches the chat drawer on in the dashboard.
+3. Open the dashboard and use the **Ask** drawer to query availability,
+   compare regions, or summarize usage.
+
+The scripted path (`npm run deploy -- --enable-chat`) automates all of this.
+When the stack is not deployed, the API returns 503 and the drawer stays
+hidden — the dashboard degrades gracefully.
+
 ## Accessing the Website
 
 The website is hosted on S3 and accessible only from within your VPC. After deployment, navigate to:
@@ -324,9 +362,17 @@ Once created, the policy detail page shows the configuration, refresh status, a 
 
 To re-run every policy against a fresh catalog (e.g. after a daily DataFetch update introduces new APIs), use **Refresh all policies** on the Settings page. Individual policies also refresh whenever you re-save them.
 
+### Asking the assistant (opt-in)
+
+If you deployed with `--enable-chat`, the dashboard gains an **Ask** drawer. Pose questions in natural language — "is Bedrock available in eu-west-2", "compare us-east-1 and ap-south-1", "which services are in the fewest regions", or, when Usage Analysis is enabled, "what EC2 instance types am I using". The model interprets your intent and chooses how to query the catalog; the actual counts, rankings, and diffs are computed in code against the same data the dashboard shows, so the answer can't drift from the catalog. The assistant is read-only — it can preview an existing policy and propose a change for you to confirm, but it never creates, edits, or deletes anything itself.
+
+![Ask the assistant](docs/images/user-guide-chat-assistant.png)
+
+The answer renders inline in the drawer: a prose reply plus a structured card with the matching services, their availability status, and documentation links — alongside the catalog's freshness date.
+
 ## Architecture
 
-This repository provides four CloudFormation stacks:
+This repository provides five CloudFormation stacks:
 
 ### Capability Insights Stack
 
@@ -388,7 +434,25 @@ A generated allow-list can exceed AWS's per-document size limits. The feature ha
 
 The `PolicyEnforcer-*` prefix on every managed policy this feature creates is **load-bearing** for the IAM scoping above — it limits the helper Lambda's blast radius to policies the feature itself owns.
 
-> **Subnet requirement**: when bringing your own VPC, the backend subnet (`--backend-subnet-id`) must be able to reach DynamoDB. Add a DynamoDB Gateway VPC Endpoint to that subnet's route table, or run the Sample Environment stack which provisions one for you.
+### Chat Stack (opt-in)
+
+Adds the conversational assistant. Deployed when you pass `--enable-chat` to `npm run deploy`. Runs a Bedrock tool-use agent loop in a Lambda placed **outside** the VPC, because Amazon Bedrock has no VPC endpoint; the in-VPC API Lambda forwards `POST /chat` to it synchronously. The agent reads the capability catalog (and, when present, the usage data and policy table) read-only and resolves every answer through the shared deterministic capability-query core — the model picks the query, code computes the result. The agent performs **no mutations**: the only write-adjacent tool is a read-only policy preview, and any change is surfaced as a proposal for the user to confirm against the existing gated routes.
+
+| Resource                   | Description                                                                                           |
+| -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Chat Lambda (out-of-VPC)   | Runs the Bedrock Converse tool-use loop; reads catalog/usage from S3 and the policy table (read-only) |
+| Scoped Bedrock permissions | Lambda role grants `bedrock:InvokeModel` on the configured model and cross-region inference profiles  |
+| Scoped S3 / DynamoDB read  | `s3:GetObject` on the website bucket and read-only access to the Policy Enforcer table when present   |
+
+The Chat Lambda holds no write permissions; mutations always run through the existing in-VPC gated routes after explicit user confirmation.
+
+**Rollback**: the Chat stack is decoupled from the base stack — the only link is the optional `ChatLambdaName` parameter the base stack reads to wire up `POST /chat`. To disable chat, delete the Chat stack on its own:
+
+```
+aws cloudformation delete-stack --stack-name CapabilityInsightsChat
+```
+
+The base stack keeps running untouched; `POST /chat` returns 503 and the dashboard hides the assistant drawer — the same graceful-degradation path as a deployment that never enabled chat. (Re-running `npm run deploy` without `--enable-chat` is the scripted equivalent, and clears the `ChatLambdaName` parameter on the next base-stack update.)
 
 ### Package Structure
 
@@ -417,6 +481,7 @@ CDK application that defines the two CloudFormation stacks. We use CDK as a deve
 - **API Lambda** (`api-lambda-main.ts`): Backs the API Gateway and routes requests from the website.
 - **DataFetch Lambda** (`data-fetch-lambda-main.ts`): Reads capability data from the source S3 access point, merges data across multiple source folders, and writes the results to the website bucket in both JSON and CSV formats.
 - **CloudTrail Analyzer** (`cloudtrail-analyzer.ts`), **CloudFormation Analyzer** (`cloudformation-analyzer.ts`), **Usage Decorator** (`usage-decorator.ts`): Power the opt-in Usage Analysis stack. Triggered by a Step Functions state machine that runs the two analyzers in parallel, then the decorator merges their output with the master catalog into personalized files for the dashboard's "My Stuff" view.
+- **Chat Lambda** (`chat-lambda-main.ts`): Powers the opt-in Chat assistant stack. Runs a Bedrock tool-use agent loop out-of-VPC; the tools (`chat/`) resolve every answer through the shared deterministic capability-query core, so the model interprets intent but never computes the result. Performs no mutations.
 
 #### `source/website`
 

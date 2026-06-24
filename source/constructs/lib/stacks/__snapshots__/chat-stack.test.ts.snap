@@ -1,0 +1,244 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CloudFormation template matches snapshot 1`] = `
+{
+  "Conditions": {
+    "HasPolicyTable": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "PolicyTableName",
+            },
+            "",
+          ],
+        },
+      ],
+    },
+  },
+  "Outputs": {
+    "BedrockModelIdOutput": {
+      "Description": "Bedrock model/inference-profile id the Chat Lambda invokes.",
+      "Export": {
+        "Name": "CapabilityInsightsBedrockModelId",
+      },
+      "Value": {
+        "Ref": "BedrockModelId",
+      },
+    },
+    "ChatLambdaName": {
+      "Description": "Name of the out-of-VPC Chat Lambda the API Lambda invokes for POST /chat.",
+      "Export": {
+        "Name": "CapabilityInsightsChatLambdaName",
+      },
+      "Value": "CapabilityInsightsChat",
+    },
+  },
+  "Parameters": {
+    "BedrockModelId": {
+      "Default": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "Description": "Bedrock model id or cross-region inference profile id the agent invokes (e.g. us.anthropic.claude-haiku-4-5-20251001-v1:0).",
+      "Type": "String",
+    },
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+    "DeploymentAssetsBucketName": {
+      "Description": "Name of S3 bucket where deployment assets (Lambda code zip) are located.",
+      "Type": "String",
+    },
+    "LambdaCodeZipPath": {
+      "Default": "lambdaAssets.zip",
+      "Description": "Path in the deployment assets bucket where the Lambda code zip is located.",
+      "Type": "String",
+    },
+    "PolicyTableName": {
+      "Default": "",
+      "Description": "Policy Enforcer DynamoDB table name. Leave empty if Policy Enforcer is not deployed; preview_policy is then unavailable.",
+      "Type": "String",
+    },
+    "WebsiteBucketName": {
+      "Description": "Website bucket the Chat Lambda reads the catalog (regions/products/apis/cfn) and sync metadata from.",
+      "Type": "String",
+    },
+  },
+  "Resources": {
+    "CapabilityInsightsChat": {
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "DeploymentAssetsBucketName",
+          },
+          "S3Key": {
+            "Ref": "LambdaCodeZipPath",
+          },
+        },
+        "Environment": {
+          "Variables": {
+            "BEDROCK_MODEL_ID": {
+              "Ref": "BedrockModelId",
+            },
+            "POLICY_TABLE_NAME": {
+              "Ref": "PolicyTableName",
+            },
+            "WEBSITE_BUCKET_NAME": {
+              "Ref": "WebsiteBucketName",
+            },
+          },
+        },
+        "FunctionName": "CapabilityInsightsChat",
+        "Handler": "chat-lambda-main.handler",
+        "MemorySize": 512,
+        "Role": {
+          "Fn::GetAtt": [
+            "CapabilityInsightsChatRole",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 29,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CapabilityInsightsChatPolicyTableRead": {
+      "Condition": "HasPolicyTable",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:Query",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Sub": [
+                  "arn:\${AWS::Partition}:dynamodb:\${AWS::Region}:\${AWS::AccountId}:table/\${TableName}",
+                  {
+                    "TableName": {
+                      "Ref": "PolicyTableName",
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CapabilityInsightsChatPolicyTableRead",
+        "Roles": [
+          {
+            "Ref": "CapabilityInsightsChatRole",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CapabilityInsightsChatRole": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "Description": "Execution role for the Capability Insights Chat Lambda. Bedrock invoke + read-only catalog/policy access.",
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Policies": [
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": [
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                    "bedrock:Converse",
+                    "bedrock:ConverseStream",
+                  ],
+                  "Effect": "Allow",
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:\${AWS::Partition}:bedrock:*::foundation-model/*",
+                    },
+                    {
+                      "Fn::Sub": "arn:\${AWS::Partition}:bedrock:\${AWS::Region}:\${AWS::AccountId}:inference-profile/*",
+                    },
+                  ],
+                },
+                {
+                  "Action": "s3:GetObject",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::Sub": [
+                      "arn:\${AWS::Partition}:s3:::\${WebsiteBucket}/*",
+                      {
+                        "WebsiteBucket": {
+                          "Ref": "WebsiteBucketName",
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "ChatBedrockInvoke",
+          },
+        ],
+        "RoleName": {
+          "Fn::Sub": "CapabilityInsightsChatRole-\${AWS::Region}",
+        },
+      },
+      "Type": "AWS::IAM::Role",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;

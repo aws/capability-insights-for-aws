@@ -15,6 +15,18 @@ exports[`CloudFormation template matches snapshot 1`] = `
         },
       ],
     },
+    "HasChatLambda": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "ChatLambdaName",
+            },
+            "",
+          ],
+        },
+      ],
+    },
     "HasIamHelper": {
       "Fn::Not": [
         {
@@ -85,6 +97,11 @@ exports[`CloudFormation template matches snapshot 1`] = `
       "Default": "/cdk-bootstrap/hnb659fds/version",
       "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
       "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+    "ChatLambdaName": {
+      "Default": "",
+      "Description": "Name of the Chat Lambda from the optional CapabilityInsightsChat stack. Leave empty if the chat assistant is not enabled.",
+      "Type": "String",
     },
     "CloudFormationAnalyzerLambdaName": {
       "Default": "",
@@ -465,6 +482,9 @@ exports[`CloudFormation template matches snapshot 1`] = `
             "ANALYSIS_STATE_MACHINE_ARN": {
               "Ref": "AnalysisStateMachineArn",
             },
+            "CHAT_LAMBDA_NAME": {
+              "Ref": "ChatLambdaName",
+            },
             "CLOUDFORMATION_ANALYZER_LAMBDA_NAME": {
               "Ref": "CloudFormationAnalyzerLambdaName",
             },
@@ -800,6 +820,36 @@ exports[`CloudFormation template matches snapshot 1`] = `
               "Version": "2012-10-17",
             },
             "PolicyName": "PolicyEnforcerBulkRefreshInvoke",
+          },
+          {
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Action": "lambda:InvokeFunction",
+                  "Effect": "Allow",
+                  "Resource": {
+                    "Fn::If": [
+                      "HasChatLambda",
+                      {
+                        "Fn::Sub": [
+                          "arn:\${AWS::Partition}:lambda:\${AWS::Region}:\${AWS::AccountId}:function:\${FunctionName}",
+                          {
+                            "FunctionName": {
+                              "Ref": "ChatLambdaName",
+                            },
+                          },
+                        ],
+                      },
+                      {
+                        "Fn::Sub": "arn:\${AWS::Partition}:lambda:\${AWS::Region}:\${AWS::AccountId}:function:none",
+                      },
+                    ],
+                  },
+                },
+              ],
+              "Version": "2012-10-17",
+            },
+            "PolicyName": "ChatLambdaInvoke",
           },
         ],
         "RoleName": {

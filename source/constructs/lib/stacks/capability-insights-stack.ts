@@ -36,6 +36,12 @@ export interface CapabilityInsightsStackProps extends cdk.StackProps {
    * for `POST /policies/refresh-all`.
    */
   policyRefreshLambdaName?: string;
+  /**
+   * Name of the out-of-VPC Chat Lambda from the optional Chat stack. When set,
+   * the API Lambda gets `CHAT_LAMBDA_NAME` and permission to invoke it, and
+   * `GET /features` reports the chat assistant as enabled.
+   */
+  chatLambdaName?: string;
 }
 
 export enum CapabilityInsightsStackOutputs {
@@ -155,6 +161,17 @@ export class CapabilityInsightsStack extends cdk.Stack {
 
     const hasPolicyRefreshLambda = new cdk.CfnCondition(this, 'HasPolicyRefreshLambda', {
       expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(policyRefreshLambdaNameParameter.valueAsString, '')),
+    });
+
+    const chatLambdaNameParameter = new cdk.CfnParameter(this, 'ChatLambdaName', {
+      type: 'String',
+      description:
+        'Name of the Chat Lambda from the optional CapabilityInsightsChat stack. Leave empty if the chat assistant is not enabled.',
+      default: props?.chatLambdaName ?? '',
+    });
+
+    const hasChatLambda = new cdk.CfnCondition(this, 'HasChatLambda', {
+      expression: cdk.Fn.conditionNot(cdk.Fn.conditionEquals(chatLambdaNameParameter.valueAsString, '')),
     });
 
     const sourceFoldersParameter = new cdk.CfnParameter(this, 'SourceFolders', {
@@ -589,6 +606,29 @@ export class CapabilityInsightsStack extends cdk.Stack {
             ],
           },
         },
+        {
+          // Chat assistant: lambda:InvokeFunction on the out-of-VPC Chat Lambda.
+          // The API Lambda forwards `POST /chat` to it synchronously. The Chat
+          // Lambda is out-of-VPC because Bedrock has no VPC endpoint. Scoped to
+          // the single Chat Lambda when deployed; a dummy ARN otherwise.
+          policyName: 'ChatLambdaInvoke',
+          policyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: 'lambda:InvokeFunction',
+                Resource: cdk.Fn.conditionIf(
+                  hasChatLambda.logicalId,
+                  cdk.Fn.sub('arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${FunctionName}', {
+                    FunctionName: chatLambdaNameParameter.valueAsString,
+                  }),
+                  cdk.Fn.sub('arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:none'),
+                ),
+              },
+            ],
+          },
+        },
       ],
     });
     const apiLambdaFunction = new lambda.CfnFunction(this, apiLambdaName, {
@@ -617,6 +657,7 @@ export class CapabilityInsightsStack extends cdk.Stack {
           POLICY_TABLE_NAME: policyTableNameParameter.valueAsString,
           IAM_HELPER_LAMBDA_NAME: iamHelperLambdaNameParameter.valueAsString,
           POLICY_REFRESH_LAMBDA_NAME: policyRefreshLambdaNameParameter.valueAsString,
+          CHAT_LAMBDA_NAME: chatLambdaNameParameter.valueAsString,
         },
       },
     });

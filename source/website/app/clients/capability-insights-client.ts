@@ -13,6 +13,7 @@ import type {
 } from '@capability-insights/shared/types/policy-enforcer/policy-api';
 import { AnalyzerType, ExecutionStatus } from '@capability-insights/shared/types/analysis';
 import { Scope } from '@capability-insights/shared/types/scope';
+import type { ConverseTurn, ChatResponse } from '~/types/chat';
 import { s3Client } from './s3-client';
 
 export enum DataFormat {
@@ -36,6 +37,13 @@ export class AnalysisNotEnabledError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'AnalysisNotEnabledError';
+  }
+}
+
+export class ChatNotEnabledError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ChatNotEnabledError';
   }
 }
 
@@ -310,6 +318,36 @@ export class CapabilityInsightsClient {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Sends one chat turn to the conversational assistant. `history` is the
+   * prior turns (text only); the server runs the Bedrock agent loop and may
+   * return a `writeProposal` the UI must confirm. Throws ChatNotEnabledError
+   * on 503 (Chat stack not deployed).
+   */
+  async chat(message: string, history: ConverseTurn[] = [], pageName?: string): Promise<ChatResponse> {
+    const baseUrl = await this.getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, history, pageName }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      let parsedMessage = '';
+      try {
+        const parsed = JSON.parse(text) as { error?: string; message?: string };
+        parsedMessage = parsed.message || parsed.error || '';
+      } catch {
+        // not JSON
+      }
+      if (res.status === 503) {
+        throw new ChatNotEnabledError(parsedMessage || 'Chat is not enabled. Re-run deploy with --enable-chat.');
+      }
+      throw new Error(`Chat request failed: ${res.status}${parsedMessage ? ` ${parsedMessage}` : ''}`);
+    }
+    return (await res.json()) as ChatResponse;
   }
 }
 
