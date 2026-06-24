@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { IamPolicyApplier } from './iam-policy-applier';
