@@ -9,6 +9,7 @@ import type { UsageFilter } from '@capability-insights/shared/types/usage-filter
 
 /** Master capability catalogs written by the data-fetch Lambda. */
 export const CatalogKey = {
+  REGIONS: 'data/json/regions.json',
   PRODUCTS: 'data/json/products.json',
   APIS: 'data/json/apis.json',
   CFN_RESOURCES: 'data/json/cfn_resources.json',
