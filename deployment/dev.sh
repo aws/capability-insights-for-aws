@@ -25,6 +25,8 @@ Deploy options:
   --cloudtrail-bucket <name>       CloudTrail logs bucket (only with --enable-usage-analysis,
                                    auto-discovered from your account if omitted)
   --enable-policy-enforcer         Also deploy the opt-in Policy Enforcer stack
+  --enable-chat                    Also deploy the opt-in Chat assistant stack (Bedrock)
+  --bedrock-model-id <id>          Bedrock model/inference-profile id for chat (only with --enable-chat)
 
 Global options:
   -y, --yes                        Skip confirmation prompts
@@ -64,7 +66,7 @@ cmd_setup() {
 }
 
 cmd_deploy() {
-  local source_access_point_arn="" source_folders="" enable_usage_analysis="" cloudtrail_bucket="" enable_policy_enforcer=""
+  local source_access_point_arn="" source_folders="" enable_usage_analysis="" cloudtrail_bucket="" enable_policy_enforcer="" enable_chat="" bedrock_model_id=""
   while [[ $# -gt 0 ]]; do
     case $1 in
       --source-access-point-arn) source_access_point_arn="$2"; shift 2 ;;
@@ -72,6 +74,8 @@ cmd_deploy() {
       --enable-usage-analysis) enable_usage_analysis="true"; shift ;;
       --cloudtrail-bucket) cloudtrail_bucket="$2"; shift 2 ;;
       --enable-policy-enforcer) enable_policy_enforcer="true"; shift ;;
+      --enable-chat) enable_chat="true"; shift ;;
+      --bedrock-model-id) bedrock_model_id="$2"; shift 2 ;;
       -y|--yes) shift ;;
       *) echo "Unknown option: $1"; usage ;;
     esac
@@ -116,6 +120,14 @@ cmd_deploy() {
     policy_enforcer_args+=(--enable-policy-enforcer)
   fi
 
+  local chat_args=()
+  if [[ "$enable_chat" == "true" ]]; then
+    chat_args+=(--enable-chat)
+    if [[ -n "$bedrock_model_id" ]]; then
+      chat_args+=(--bedrock-model-id "$bedrock_model_id")
+    fi
+  fi
+
   local deploy_args=(
     --private-vpc-id "$private_vpc_id"
     --backend-subnet-id "$backend_subnet_id"
@@ -124,6 +136,7 @@ cmd_deploy() {
     "${access_point_args[@]}"
     "${usage_analysis_args[@]}"
     "${policy_enforcer_args[@]}"
+    "${chat_args[@]}"
   )
   [[ -n "$AUTO_APPROVE" ]] && deploy_args+=(--yes)
 

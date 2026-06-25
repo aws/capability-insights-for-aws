@@ -50,6 +50,18 @@ export const EnvironmentKey = {
    * not a positive integer. Primarily useful for local testing/debugging.
    */
   FEATURES_CACHE_TTL_MS: 'FEATURES_CACHE_TTL_MS',
+  /**
+   * Name of the out-of-VPC Chat Lambda that runs the Bedrock agent loop. Set
+   * by the optional Chat stack (`--enable-chat`) and wired onto the API Lambda;
+   * its presence is the "chat enabled" signal for `GET /features`. Absent when
+   * the feature is not deployed, in which case `POST /chat` returns 503.
+   */
+  CHAT_LAMBDA_NAME: 'CHAT_LAMBDA_NAME',
+  /**
+   * Bedrock model id (or cross-region inference profile id, e.g.
+   * `us.anthropic.claude-...`) the Chat Lambda invokes. Set by the Chat stack.
+   */
+  BEDROCK_MODEL_ID: 'BEDROCK_MODEL_ID',
 } as const;
 
 export type EnvironmentKey = (typeof EnvironmentKey)[keyof typeof EnvironmentKey];

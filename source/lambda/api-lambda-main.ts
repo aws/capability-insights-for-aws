@@ -8,6 +8,7 @@ import { syncCapabilityDataRoute } from './routes/sync-capability-data-route';
 import { handleAnalyze } from './routes/analyze-route';
 import { getUsedCapabilities } from './routes/usage-route';
 import { getFeaturesRoute } from './routes/features-route';
+import { chatRoute } from './routes/chat-route';
 import {
   createPolicyRoute,
   listPoliciesRoute,
@@ -35,6 +36,8 @@ registerRoute(HttpMethod.GET, '/analysis', handleAnalyze);
 registerRoute(HttpMethod.GET, '/capabilities', getUsedCapabilities);
 // Feature flags: deploy-time state of opt-in features for the UI
 registerRoute(HttpMethod.GET, '/features', getFeaturesRoute);
+// Chat agent (optional): proxies to the out-of-VPC Chat Lambda. 503 when not deployed.
+registerRoute(HttpMethod.POST, '/chat', chatRoute);
 
 // Policy Enforcer routes (parameterized)
 registerRoute(HttpMethod.POST, '/policies', createPolicyRoute);

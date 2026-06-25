@@ -10,6 +10,7 @@ import type {
   FeatureFlags,
   UsageAnalysisFeatureFlag,
   PolicyEnforcerFeatureFlag,
+  ChatFeatureFlag,
   ExecutionStatusValue,
 } from '@capability-insights/shared/types/feature-flags';
 
@@ -47,9 +48,13 @@ export async function getFeaturesRoute(): Promise<APIGatewayProxyResult> {
     return ok(cached);
   }
 
-  const [usageAnalysis, policyEnforcer] = await Promise.all([loadUsageAnalysisFlag(), loadPolicyEnforcerFlag()]);
+  const [usageAnalysis, policyEnforcer, chat] = await Promise.all([
+    loadUsageAnalysisFlag(),
+    loadPolicyEnforcerFlag(),
+    loadChatFlag(),
+  ]);
 
-  const flags: FeatureFlags = { usageAnalysis, policyEnforcer };
+  const flags: FeatureFlags = { usageAnalysis, policyEnforcer, chat };
   writeCache(flags);
   return ok(flags);
 }
@@ -133,4 +138,12 @@ async function loadPolicyEnforcerFlag(): Promise<PolicyEnforcerFeatureFlag> {
   // the table name is the canonical "deployed" signal.
   const policyTableName = getOptionalEnv(EnvironmentKey.POLICY_TABLE_NAME);
   return { enabled: Boolean(policyTableName) };
+}
+
+function loadChatFlag(): Promise<ChatFeatureFlag> {
+  // The optional Chat stack wires CHAT_LAMBDA_NAME onto the API Lambda; its
+  // presence is the canonical "deployed" signal. Synchronous, but kept async
+  // to sit alongside the other flag loaders in Promise.all.
+  const chatLambdaName = getOptionalEnv(EnvironmentKey.CHAT_LAMBDA_NAME);
+  return Promise.resolve({ enabled: Boolean(chatLambdaName) });
 }

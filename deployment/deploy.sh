@@ -24,6 +24,11 @@ Deploy options (pass as flags or omit to be prompted):
                                          auto-discovered from your account's CloudTrail trails if omitted)
   --enable-policy-enforcer               Deploy the Policy Enforcer stack (regional governance
                                          policies generated from the catalog)
+  --enable-chat                          Deploy the Chat assistant stack (Bedrock-backed
+                                         conversational agent). Requires Bedrock + Claude in
+                                         the deploy region; unavailable in GovCloud/sovereign/ADC.
+  --bedrock-model-id <id>                Bedrock model or cross-region inference profile id for
+                                         chat (default: us.anthropic.claude-haiku-4-5-20251001-v1:0)
   -y, --yes                              Skip confirmation prompts
 
 Examples:
@@ -58,6 +63,36 @@ prompt_if_empty() {
     read -rp "$prompt: " current
     printf -v "$varname" '%s' "$current"
   fi
+}
+
+# Preflight for --enable-chat: the Chat stack grants the IAM permission to call
+# Bedrock, but it CANNOT enable account-level model access — that's a per-account,
+# per-region Bedrock setting (and a use-case agreement for Anthropic models) the
+# account owner must enable in the Bedrock console. Without it the stack deploys
+# fine but every chat call fails at runtime with AccessDeniedException. This probe
+# makes that failure visible at deploy time instead. It is read-only and
+# NON-FATAL: a warning, never a blocker (access may be pending, or enabled later).
+check_bedrock_access() {
+  local model_id=$1 region=$2
+  # A 1-token Converse is the most reliable signal that the account can actually
+  # invoke the model (entitlement + region), short of a full chat turn.
+  if aws bedrock-runtime converse \
+        --region "$region" \
+        --model-id "$model_id" \
+        --messages '[{"role":"user","content":[{"text":"ping"}]}]' \
+        --inference-config '{"maxTokens":1}' \
+        --query 'stopReason' --output text >/dev/null 2>&1; then
+    echo "  ✓ Bedrock model access confirmed: $model_id ($region)."
+    return 0
+  fi
+  echo ""
+  echo "  ⚠️  WARNING: could not invoke Bedrock model '$model_id' in $region."
+  echo "      The Chat stack will still deploy, but chat requests will FAIL at"
+  echo "      runtime until you enable model access for this account/region:"
+  echo "        Bedrock console → Model access → enable the Anthropic Claude model"
+  echo "        (accept the use-case agreement if prompted), then retry chat."
+  echo "      This is an account-level setting the deploy cannot enable for you."
+  echo ""
 }
 
 # Run `aws cloudformation deploy` and react to the real outcome.
@@ -109,7 +144,7 @@ deploy_stack_checked() {
 }
 
 cmd_deploy() {
-  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders="" cloudtrail_bucket="" enable_usage_analysis="" enable_policy_enforcer="" auto_approve=""
+  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders="" cloudtrail_bucket="" enable_usage_analysis="" enable_policy_enforcer="" enable_chat="" bedrock_model_id="" auto_approve=""
 
   while [[ $# -gt 0 ]]; do
     case $1 in
@@ -122,6 +157,8 @@ cmd_deploy() {
       --cloudtrail-bucket)               cloudtrail_bucket="$2"; shift 2 ;;
       --enable-usage-analysis)           enable_usage_analysis="true"; shift ;;
       --enable-policy-enforcer)          enable_policy_enforcer="true"; shift ;;
+      --enable-chat)                     enable_chat="true"; shift ;;
+      --bedrock-model-id)                bedrock_model_id="$2"; shift 2 ;;
       -y|--yes)                          auto_approve="true"; shift ;;
       *) echo "Unknown option: $1"; usage ;;
     esac
@@ -405,6 +442,66 @@ JSON
     echo "  Skipped (pass --enable-policy-enforcer to deploy)."
   fi
 
+  echo "── Deploying Chat assistant stack ──"
+  if [[ "$enable_chat" == "true" ]]; then
+    local model_id="${bedrock_model_id:-us.anthropic.claude-haiku-4-5-20251001-v1:0}"
+    # Preflight: warn early if account-level Bedrock model access isn't enabled
+    # (the stack grants invoke permission but can't enable the model itself).
+    check_bedrock_access "$model_id" "$REGION"
+    deploy_stack_checked CapabilityInsightsChat \
+      --template-file "$SCRIPT_DIR/dist/template/chat.template.json" \
+      --parameter-overrides \
+        DeploymentAssetsBucketName="$deployment_assets_bucket_name" \
+        LambdaCodeZipPath="$lambda_key" \
+        WebsiteBucketName="$website_bucket" \
+        PolicyTableName="${policy_table_name:-}" \
+        BedrockModelId="$model_id" \
+      --capabilities CAPABILITY_NAMED_IAM \
+      --no-cli-pager
+    echo "  ✓ Chat stack deployed."
+
+    local chat_lambda_name
+    chat_lambda_name=$(aws cloudformation describe-stacks \
+      --stack-name CapabilityInsightsChat \
+      --query "Stacks[0].Outputs[?OutputKey=='ChatLambdaName'].OutputValue" --output text 2>/dev/null || echo "")
+
+    # Force-update the Chat Lambda's code (CFN may skip if template unchanged).
+    if [[ -n "$chat_lambda_name" ]]; then
+      aws lambda update-function-code \
+        --function-name "$chat_lambda_name" \
+        --s3-bucket "$deployment_assets_bucket_name" \
+        --s3-key "$lambda_key" > /dev/null 2>&1 || true
+
+      echo "── Updating Insights stack with Chat output ──"
+      # Re-run the main stack with ChatLambdaName plus any already-discovered
+      # Usage Analysis / Policy Enforcer outputs so we don't lose them. Empty
+      # vars are passed through as "" (their HasX condition stays false).
+      deploy_stack_checked CapabilityInsightsForAWS \
+        --template-file "$SCRIPT_DIR/dist/template/capability-insights.template.json" \
+        --parameter-overrides \
+          PrivateVpcId="$private_vpc_id" \
+          BackendSubnetId="$backend_subnet_id" \
+          ApiAccessSubnetId="$api_access_subnet_id" \
+          DeploymentAssetsBucketName="$deployment_assets_bucket_name" \
+          DeploymentAssetsBucketApiLambdaFunctionCodeZipPath="$lambda_key" \
+          SourceAccessPointArn="$source_access_point_arn" \
+          SourceFolders="$source_folders" \
+          AnalysisStateMachineArn="${analysis_state_machine_arn:-}" \
+          CloudTrailAnalyzerLambdaName="${cloudtrail_analyzer_lambda_name:-}" \
+          CloudFormationAnalyzerLambdaName="${cloudformation_analyzer_lambda_name:-}" \
+          ConfiguredCloudTrailBucketName="${cloudtrail_bucket:-}" \
+          PolicyTableName="${policy_table_name:-}" \
+          IamHelperLambdaName="${iam_helper_lambda_name:-}" \
+          PolicyRefreshLambdaName="${policy_refresh_lambda_name:-}" \
+          ChatLambdaName="$chat_lambda_name" \
+        --capabilities CAPABILITY_NAMED_IAM \
+        --no-cli-pager
+      echo "  ✓ Insights stack updated with Chat integration."
+    fi
+  else
+    echo "  Skipped (pass --enable-chat to deploy)."
+  fi
+
   echo "── Syncing capability data ──"
   aws lambda invoke --function-name CapabilityInsightsDataFetchLambda --invocation-type Event /dev/null > /dev/null 2>&1
 
@@ -422,13 +519,18 @@ cmd_teardown() {
   local website_bucket="capability-insights-website-${ACCOUNT_ID}-${REGION}"
 
   if [[ "$AUTO_APPROVE" != "true" ]]; then
-    echo "This will delete the CapabilityInsightsForAWS, CapabilityInsightsUsageAnalysis, and CapabilityInsightsPolicyEnforcer stacks and empty the website bucket."
+    echo "This will delete the CapabilityInsightsForAWS, CapabilityInsightsUsageAnalysis, CapabilityInsightsPolicyEnforcer, and CapabilityInsightsChat stacks and empty the website bucket."
     read -rp "Continue? (y/N): " confirm
     [[ "$confirm" =~ ^[Yy]$ ]] || exit 0
   fi
 
   echo "── Emptying website bucket ──"
   aws s3 rm "s3://$website_bucket" --recursive || true
+
+  echo "── Destroying Chat stack ──"
+  aws cloudformation delete-stack --stack-name CapabilityInsightsChat 2>/dev/null || true
+  aws cloudformation wait stack-delete-complete --stack-name CapabilityInsightsChat 2>/dev/null || true
+  echo "  ✓ Chat stack deleted."
 
   echo "── Destroying Policy Enforcer stack ──"
   aws cloudformation delete-stack --stack-name CapabilityInsightsPolicyEnforcer 2>/dev/null || true

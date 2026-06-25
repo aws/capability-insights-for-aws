@@ -29,3 +29,13 @@ if (fs.existsSync(policyEnforcerPath)) {
     JSON.stringify(stripCdkMetadata(policyRaw), null, 2),
   );
 }
+
+// Package Chat stack template if it exists
+const chatPath = 'build/cdk.out/CapabilityInsightsChat.template.json';
+if (fs.existsSync(chatPath)) {
+  const chatRaw = JSON.parse(fs.readFileSync(chatPath, 'utf8'));
+  fs.writeFileSync(
+    '../../deployment/dist/template/chat.template.json',
+    JSON.stringify(stripCdkMetadata(chatRaw), null, 2),
+  );
+}

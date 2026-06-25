@@ -14,6 +14,7 @@
 export interface FeatureFlags {
   usageAnalysis: UsageAnalysisFeatureFlag;
   policyEnforcer: PolicyEnforcerFeatureFlag;
+  chat: ChatFeatureFlag;
 }
 
 /** State of an execution as reported by Step Functions ListExecutions. */
@@ -41,5 +42,10 @@ export interface UsageAnalysisFeatureFlag {
 
 export interface PolicyEnforcerFeatureFlag {
   /** True when the Policy Enforcer stack is deployed (env vars present). */
+  enabled: boolean;
+}
+
+export interface ChatFeatureFlag {
+  /** True when the optional Chat stack is deployed (CHAT_LAMBDA_NAME present). */
   enabled: boolean;
 }
