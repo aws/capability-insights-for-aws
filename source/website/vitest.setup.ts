@@ -1,4 +1,13 @@
 import '@testing-library/jest-dom/vitest';
+import { afterEach } from 'vitest';
+import { cleanup } from '@testing-library/react';
+
+// Testing Library only auto-registers cleanup when vitest globals are enabled.
+// Without it, mounted components keep scheduling React work after the jsdom
+// environment is torn down ("window is not defined" uncaught exceptions).
+afterEach(() => {
+  cleanup();
+});
 
 // Cloudscape components rely on browser APIs that jsdom does not implement.
 if (typeof globalThis.ResizeObserver === 'undefined') {
