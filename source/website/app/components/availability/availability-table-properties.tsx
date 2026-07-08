@@ -148,18 +148,25 @@ export function createFilteringFunction(items: RegionalAvailability[]) {
     }
   };
 
-  const matchesTokens = (item: RegionalAvailability, tokens: readonly PropertyFilterToken[]): boolean => {
-    for (const token of tokens) {
-      if (!token.propertyKey) continue;
+  const matchesTokens = (
+    item: RegionalAvailability,
+    tokens: readonly PropertyFilterToken[],
+    operation: PropertyFilterQuery['operation'],
+  ): boolean => {
+    // Tokens without a propertyKey (free text, token groups) are not evaluated
+    // and act as "no constraint", preserving longstanding behavior.
+    const evaluableTokens = tokens.filter(token => token.propertyKey);
+    if (evaluableTokens.length === 0) return true;
 
-      const isRegion = token.propertyKey.startsWith('region:');
+    const matchesToken = (token: PropertyFilterToken): boolean => {
+      const isRegion = token.propertyKey!.startsWith('region:');
       const value = isRegion
-        ? item.regionalAvailability?.[token.propertyKey.slice(7)]
-        : resolve(item, token.propertyKey);
+        ? item.regionalAvailability?.[token.propertyKey!.slice(7)]
+        : resolve(item, token.propertyKey!);
+      return tokenMatches(value, token, token.propertyKey);
+    };
 
-      if (!tokenMatches(value, token, token.propertyKey)) return false;
-    }
-    return true;
+    return operation === 'or' ? evaluableTokens.some(matchesToken) : evaluableTokens.every(matchesToken);
   };
 
   const hasMatchedAncestor = (item: RegionalAvailability): boolean => {
@@ -181,7 +188,7 @@ export function createFilteringFunction(items: RegionalAvailability[]) {
 
     const tokens = query.tokenGroups ?? query.tokens;
 
-    if (matchesTokens(item, tokens as readonly PropertyFilterToken[])) {
+    if (matchesTokens(item, tokens as readonly PropertyFilterToken[], query.operation)) {
       matchedIds.add(item.id);
       return true;
     }

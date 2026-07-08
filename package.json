@@ -1,6 +1,6 @@
 {
   "name": "capability-insights-for-aws",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "private": true,
   "license": "Apache-2.0",
   "workspaces": [

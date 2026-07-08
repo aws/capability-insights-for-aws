@@ -32,3 +32,5 @@ Thumbs.db
 
 # Logs
 *.log
+# npm
+.npmrc
