@@ -59,12 +59,13 @@ function deepMerge<T>(existing: T, incoming: T, childConfigs?: ChildMergeConfig[
     if (Array.isArray(incomingValue) && Array.isArray(existingValue)) {
       const config = childConfigs?.find(c => c.key === key);
       if (config) {
-        // Deduplicate this child array and pass remaining configs for deeper levels
-        const remainingConfigs = childConfigs?.filter(c => c.key !== key);
+        // Deduplicate this child array. Pass ALL configs down so self-recursive
+        // structures (e.g. childProducts nested inside childProducts) keep
+        // merging by id at every depth instead of concatenating duplicates.
         mergedItem[key] = mergeArrayById(
           [...existingValue, ...incomingValue],
           config.getId as (item: unknown) => string,
-          remainingConfigs,
+          childConfigs,
         );
       } else {
         // Plain array — just concatenate

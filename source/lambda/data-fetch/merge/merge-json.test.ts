@@ -82,6 +82,112 @@ describe('mergeJson', () => {
         'eu-west-1': 'Available',
       });
     });
+    it('deduplicates grandchild products present in multiple sources (self-recursive childProducts)', () => {
+      // A sub-service (SERVICE nested under a SERVICE) with its own features
+      // can appear in multiple source folders and must merge into one record.
+      const makeChunk = (regions: Record<string, string>, childRegions: Record<string, string>) =>
+        JSON.stringify([
+          {
+            productId: 'parent-service',
+            productName: 'Parent Service',
+            productType: 'SERVICE',
+            regionalAvailability: regions,
+            childProducts: [
+              {
+                productId: 'sub-service',
+                productName: 'Sub Service',
+                productType: 'SERVICE',
+                regionalAvailability: regions,
+                childProducts: [
+                  {
+                    productId: 'nested-feature',
+                    productName: 'Nested Feature',
+                    productType: 'FEATURE',
+                    regionalAvailability: childRegions,
+                    launchDates: Object.fromEntries(
+                      Object.entries(childRegions)
+                        .filter(([, v]) => v === 'Planned')
+                        .map(([k]) => [k, '2099 Q1']),
+                    ),
+                  },
+                ],
+              },
+            ],
+          },
+        ]);
+
+      const chunk1 = makeChunk({ 'us-east-1': 'Available' }, { 'us-east-1': 'Available' });
+      const chunk2 = makeChunk({ 'eu-west-1': 'Available' }, { 'eu-west-1': 'Planned' });
+
+      const result = JSON.parse(
+        mergeJson([chunk1, chunk2], p => p.productId, [{ key: 'childProducts', getId: c => c.productId }]),
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].childProducts).toHaveLength(1);
+
+      // The grandchild must appear exactly once, with availability merged from both sources.
+      const grandchildren = result[0].childProducts[0].childProducts;
+      expect(grandchildren).toHaveLength(1);
+      expect(grandchildren[0].regionalAvailability).toEqual({
+        'us-east-1': 'Available',
+        'eu-west-1': 'Planned',
+      });
+      expect(grandchildren[0].launchDates).toEqual({ 'eu-west-1': '2099 Q1' });
+    });
+
+    it('deduplicates products by id at arbitrary nesting depth', () => {
+      const makeChunk = (region: string) =>
+        JSON.stringify([
+          {
+            productId: 'l1',
+            productName: 'Level 1',
+            productType: 'SERVICE',
+            regionalAvailability: { [region]: 'Available' },
+            childProducts: [
+              {
+                productId: 'l2',
+                productName: 'Level 2',
+                productType: 'SERVICE',
+                regionalAvailability: { [region]: 'Available' },
+                childProducts: [
+                  {
+                    productId: 'l3',
+                    productName: 'Level 3',
+                    productType: 'SERVICE',
+                    regionalAvailability: { [region]: 'Available' },
+                    childProducts: [
+                      {
+                        productId: 'l4',
+                        productName: 'Level 4',
+                        productType: 'FEATURE',
+                        regionalAvailability: { [region]: 'Available' },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ]);
+
+      const result = JSON.parse(
+        mergeJson([makeChunk('us-east-1'), makeChunk('eu-west-1')], p => p.productId, [
+          { key: 'childProducts', getId: c => c.productId },
+        ]),
+      );
+
+      let level = result;
+      for (const id of ['l1', 'l2', 'l3', 'l4']) {
+        expect(level).toHaveLength(1);
+        expect(level[0].productId).toBe(id);
+        expect(level[0].regionalAvailability).toEqual({
+          'us-east-1': 'Available',
+          'eu-west-1': 'Available',
+        });
+        level = level[0].childProducts;
+      }
+    });
   });
 
   describe('apis', () => {
