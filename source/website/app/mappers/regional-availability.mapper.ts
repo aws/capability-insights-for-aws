@@ -14,14 +14,19 @@ import { RegionalAvailabilityType } from '@capability-insights/shared/types/avai
  * Flattens the nested childProducts structure into a flat array
  * using id/parentId references.
  *
+ * The table only ever shows two levels (parent and child). Child products of
+ * type SERVICE can have their own children, so they are emitted twice: once as
+ * a leaf child under their parent (for context, with a synthetic id to keep
+ * row ids unique), and once as a root row with their own children underneath.
+ *
  * @param products - Raw product data from the client
  * @returns Flat array of rows with availability status per region
  */
 export function fromProducts(products: Product[]): ProductAvailability[] {
   const rows: ProductAvailability[] = [];
 
-  const toRow = (product: Product, parentId: string | null): ProductAvailability => ({
-    id: product.productId,
+  const toRow = (product: Product, parentId: string | null, id?: string): ProductAvailability => ({
+    id: id ?? product.productId,
     parentId,
     name: product.productName,
     productType: product.productType,
@@ -32,11 +37,23 @@ export function fromProducts(products: Product[]): ProductAvailability[] {
     regionalAvailability: product.regionalAvailability,
   });
 
-  for (const p of products) {
-    rows.push(toRow(p, null));
-    for (const child of p.childProducts ?? []) {
-      rows.push(toRow(child, p.productId));
+  const emitTwoLevels = (parent: Product): void => {
+    rows.push(toRow(parent, null));
+    for (const child of parent.childProducts ?? []) {
+      if (child.productType === ProductType.SERVICE) {
+        // Leaf child row for context under its parent; the synthetic id keeps
+        // it distinct from the root row emitted below.
+        rows.push(toRow(child, parent.productId, `${parent.productId}:${child.productId}`));
+        // Root row for the child service, with its own children underneath.
+        emitTwoLevels(child);
+      } else {
+        rows.push(toRow(child, parent.productId));
+      }
     }
+  };
+
+  for (const p of products) {
+    emitTwoLevels(p);
   }
 
   return rows;
