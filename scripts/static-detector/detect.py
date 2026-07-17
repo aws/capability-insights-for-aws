@@ -143,7 +143,7 @@ class Detection:
         # and unioned across all resources of this type during dedupe, so the
         # report shows "Lambda runtimes in use: java17, python3.9" rather than
         # per-resource noise. Values are literals only; a variable/import value
-        # is recorded as "<unresolved>" — never a guessed default (see N12).
+        # is recorded as "<unresolved>" — never a guessed default.
         self.attributes = None
 
     def key(self):
@@ -273,7 +273,7 @@ def parse_terraform(text, rel_path):
 
 
 # --------------------------------------------------------------------------- #
-# Config / runtime PROPERTY extraction (F11/F12).
+# Config / runtime PROPERTY extraction.
 #
 # The parsers above answer "which resource types exist". This pass answers
 # "how are they configured" — Lambda runtime, RDS/ElastiCache/EMR engine
@@ -334,8 +334,8 @@ _CFN_KV_RE = re.compile(r'^(\s*)([A-Za-z0-9]+)\s*:\s*(.+?)\s*$')
 #   Terraform: variable & expression refs  (var.x, local.x, data.x, module.x,
 #     each.x, count.x, try(...), func calls, [for ...], ternaries, interpolation)
 # If the value isn't a plain literal, we record "<unresolved>" rather than
-# emitting a variable name as though it were a resolved value (N12: never
-# mis-claim — a var reference is NOT the runtime value).
+# emitting a variable name as though it were a resolved value (never mis-claim —
+# a var reference is NOT the runtime value).
 _UNRESOLVED_RE = re.compile(
     r'^(!'                      # CFN short intrinsic  !Ref / !GetAtt
     r'|\{|\['                   # object/array/for-expr start
@@ -385,7 +385,8 @@ def _clean_value(raw):
 
 
 # --------------------------------------------------------------------------- #
-# Reference resolution — Rung 1 (same-scope defaults only).
+# Reference resolution — resolve bare variable/parameter references to their
+# declared values.
 #
 # A property value that is a BARE reference to a variable/parameter declared in
 # the SAME scan scope (a TF `variable "x" { default = ... }` / `locals`, or a
@@ -408,13 +409,13 @@ _CFN_BARE_REF_RE = re.compile(
 def resolve_value(raw, symbols):
     """Resolve a property value to the SET of literal values it could take:
       * a plain literal              -> {literal}
-      * a bare var/local/!Ref whose name is known in `symbols` (Rung 1 same-scope
-        defaults + Rung 2 repo-wide constants/tfvars) -> the symbol's literal(s)
+      * a bare var/local/!Ref whose name is known in `symbols` (same-scope
+        defaults + repo-wide constants/tfvars) -> the symbol's literal(s)
       * anything else (expression, ternary, unknown ref, cross-module) -> {"<unresolved>"}
     Returning a set lets an ambiguous variable (different values in different
-    tfvars/constants) report ALL observed values — for a demand-signal tool,
-    "the repo declares m5.large AND m5.xlarge for this" is honest signal, dead
-    code or not. Never guesses a value the repo doesn't contain."""
+    tfvars/constants) report ALL observed values — if the repo declares both
+    m5.large and m5.xlarge, both are reported. Never guesses a value the repo
+    does not contain."""
     v = (raw or "").strip().rstrip(",")
     # Bare reference we might resolve against the symbol table.
     bare = v.strip('"\'')
@@ -435,7 +436,7 @@ def resolve_value(raw, symbols):
 
 def collect_tfvars(text):
     """Parse a Terraform *.tfvars / *.auto.tfvars file: top-level `name = <literal>`
-    assignments (Rung 2). Returns {name: literal}. Nested blocks are ignored."""
+    assignments. Returns {name: literal}. Nested blocks are ignored."""
     defaults = {}
     depth = 0
     assign = re.compile(r'^([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(.+?)\s*$')
@@ -1210,10 +1211,9 @@ def parse_iam_actions(text, rel_path):
 # CloudTrail log parsing — a SECOND, complementary input mode (opt-in via
 # --cloudtrail). Where the code scan says "what the code CAN use", CloudTrail
 # says "what ACTUALLY ran": each log record carries eventSource (service),
-# eventName (operation), and awsRegion (where it ran). This is the same signal
-# Capabilities/CloudBuilder derive via Athena — but we read the delivered
-# CloudTrail .json.gz / .json files DIRECTLY (stdlib gzip+json, no Glue/Athena),
-# so it stays a lightweight, dependency-free, offline-capable mode.
+# eventName (operation), and awsRegion (where it ran). We read the delivered
+# CloudTrail .json.gz / .json files DIRECTLY (stdlib gzip+json), so it stays a
+# lightweight, dependency-free, offline-capable mode.
 #
 # Detections are api-axis (service+operation) + service-axis, carry the REAL
 # region (unlike the code scan, which is region-less), detectionMethod
@@ -1266,7 +1266,8 @@ def _iter_cloudtrail_records(path):
 
 # Auth/console plumbing that shows up in every trail but isn't a real "service
 # in use" signal — the sign-in/credential surfaces every account exercises.
-# Dropped like we drop `iam` from code detection, to keep the demand signal clean.
+# Dropped (like `iam` in code detection) to keep the results focused on the
+# services an application actually uses.
 _CLOUDTRAIL_NOISE = {"sts", "signin", "sso", "sso-oidc", "identitystore",
                      "health", "cloudtrail"}
 
@@ -1549,14 +1550,13 @@ def detect(root, cloudtrail_path=None):
     # references can be resolved against values declared ANYWHERE in the repo:
     #   Phase A: parse resources (raw property values) + collect a repo-wide
     #            symbol table {name: set(literals)} from TF variable/locals
-    #            defaults (Rung 1), TF *.tfvars constants (Rung 2), and CFN
-    #            Parameters defaults (Rung 1).
+    #            defaults, TF *.tfvars constants, and CFN Parameters defaults.
     #   Phase B: resolve each raw value to the set of literals it could take
     #            (literal | ref->symbol | <unresolved>) and accumulate per type.
-    # A bare ref with several repo values reports ALL of them — for a demand
-    # signal, "the repo declares m5.large AND m5.xlarge" is honest (even if a
-    # given value is only in unused/constants code). Deeper fidelity (exact
-    # deploy-time value) comes from `cdk synth` / `terraform plan` (see README).
+    # A bare ref with several repo values reports ALL of them — if the repo
+    # declares both m5.large and m5.xlarge, both are reported (even if a given
+    # value is only in unused/constants code). Deeper fidelity (exact deploy-time
+    # value) comes from `cdk synth` / `terraform plan` (see README).
     symbols = {}            # name -> set(literal values) seen repo-wide
     raw_prop_entries = []   # (cfn_type, {attr: raw_value})
 
@@ -1733,7 +1733,7 @@ def print_table(detections, files_summary):
 
 
 # --------------------------------------------------------------------------- #
-# Report generation (F6: preflight report, Markdown + HTML).
+# Report generation (Markdown + HTML).
 # --------------------------------------------------------------------------- #
 def _run_id():
     """A unique, sortable run id: UTC timestamp + short random suffix, e.g.
@@ -1914,15 +1914,13 @@ def write_reports(detections, files_summary, target_path, out_dir, run_id):
 
 
 # --------------------------------------------------------------------------- #
-# Results payload — build the structured event list and write it locally.
+# Results payload — build the structured detection list and write it locally.
 #
 # This tool is fully STATIC and OFFLINE: it never makes a network call. It writes
-# the results (report + a structured payload) to local files; getting those files
-# to AWS is a manual hand-off (the customer sends the payload to their AWS point
-# of contact — see _print_manual_delivery_notice). Automated upload is a planned
-# fast-follow and is intentionally NOT built into this tool.
+# the results (report + a structured payload) to local files; sharing those files
+# is up to the user (see _print_manual_delivery_notice).
 #
-# Each event carries the core fields plus `service`; per-resource config depth
+# Each detection carries the core fields plus `service`; per-resource config depth
 # (runtime, engineVersion, instanceType, ...) rides in `attributes`. No source
 # code or file contents are ever included in the payload.
 DETECTION_SOURCE = "DETECTOR"
@@ -1940,12 +1938,9 @@ def _detection_id(scan_id, axis, service, name, region=None):
 
 def _wire_name(d):
     """The `name` a detection record carries, kept as a LEAF so service and the
-    operation/resource-type stay in SEPARATE fields — matching how the
-    grounding data and the capability-insights shared types model it
-    (sdkServiceName + apiAction, serviceName + resourceTypeName), NOT the
-    combined `Service+Op`
-    string. This lets a consumer join directly on `service` + `name` with no
-    string-splitting.
+    operation/resource-type stay in SEPARATE fields (service + name), NOT a
+    combined `Service+Op` string. This lets a consumer join directly on
+    `service` + `name` with no string-splitting.
 
       * api     -> bare operation      ("S3+PutObject"        -> "PutObject")
       * cfn     -> resource type name  ("AWS::S3::Bucket", unchanged)
@@ -2096,18 +2091,19 @@ def save_identity(args, out_dir, customer, application, timestamp):
 
 
 def _print_manual_delivery_notice(out_dir, run_id, payload_path, error=None):
-    """The scan is fully local/offline; this notice tells the customer how to get
-    the results to AWS: send the payload file to their AWS point of contact for
-    ingestion. (Automated upload is a planned fast-follow.)"""
+    """The scan is fully local/offline; this notice points the user at the
+    results file they can review and share with their AWS point of contact."""
     print("\n" + "=" * 70)
     print("  RESULTS READY — one quick step to share them")
     print("=" * 70)
     print("  Your scan completed and all results are saved locally.")
-    print("\n  To share these results with the AWS team, please send the")
-    print("  following file to your AWS point of contact:\n")
+    print("\n  To share these results with the AWS team, review and then send")
+    print("  the following file to your AWS point of contact:\n")
     print(f"    • {os.path.abspath(payload_path)}")
-    print("\n  This file contains only the detected AWS capability inventory —")
-    print("  no source code or file contents are included.")
+    print("\n  It contains only the detected AWS capability inventory (services,")
+    print("  resource types, API operations, and their config such as runtimes")
+    print("  and instance types) — no source code or file contents. Please")
+    print("  review it before sending.")
     print("=" * 70)
 
 
