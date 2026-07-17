@@ -5,3 +5,6 @@ cdk.out
 deployment/dist
 .react-router
 package-lock.json
+
+# Standalone Python tool (not part of the TS/npm build; not prettier-formatted)
+scripts/static-detector/

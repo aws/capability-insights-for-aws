@@ -1476,7 +1476,7 @@ def collect_files(root):
                 continue  # never detect on the detector's own source (self-scan)
             if fn == ".capabilities-detector-registry.json" \
                     or fn.startswith("capabilities-report-") \
-                    or fn.startswith("telemetry-payload-"):
+                    or fn.startswith("capabilities-payload-"):
                 continue  # our own outputs written into the scanned dir
             ext = os.path.splitext(fn)[1].lower()
             if in_synth:
@@ -1925,26 +1925,27 @@ def write_reports(detections, files_summary, target_path, out_dir, run_id):
 # Each event carries the core fields plus `service`; per-resource config depth
 # (runtime, engineVersion, instanceType, ...) rides in `attributes`. No source
 # code or file contents are ever included in the payload.
-EVENT_SOURCE = "DETECTOR"
+DETECTION_SOURCE = "DETECTOR"
 SCHEMA_VERSION = "2"
 RUN_TYPE = "PREFLIGHT"
 
 
-def _event_id(scan_id, axis, service, name, region=None):
-    """Deterministic idempotency key: short sha256. Server dedupes retransmits."""
+def _detection_id(scan_id, axis, service, name, region=None):
+    """Deterministic idempotency key: short sha256. A consumer can dedupe
+    re-submissions of the same detection on this stable id."""
     import hashlib
-    raw = f"{scan_id}|{EVENT_SOURCE}|{axis}|{service}|{name}|{region or ''}"
+    raw = f"{scan_id}|{DETECTION_SOURCE}|{axis}|{service}|{name}|{region or ''}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
 def _wire_name(d):
-    """The `name` a TelemetryEvent carries, kept as a LEAF so service and the
+    """The `name` a detection record carries, kept as a LEAF so service and the
     operation/resource-type stay in SEPARATE fields — matching how the
     grounding data and the capability-insights shared types model it
     (sdkServiceName + apiAction, serviceName + resourceTypeName), NOT the
     combined `Service+Op`
-    string. This makes the telemetry service join directly on `service` +
-    `name` with no string-splitting.
+    string. This lets a consumer join directly on `service` + `name` with no
+    string-splitting.
 
       * api     -> bare operation      ("S3+PutObject"        -> "PutObject")
       * cfn     -> resource type name  ("AWS::S3::Bucket", unchanged)
@@ -1952,7 +1953,7 @@ def _wire_name(d):
                    grounded SdkServiceId, so every source looks the same)
 
     The internal `d.identifier` (the combined form) is left untouched — it stays
-    the stable dedup / eventId key."""
+    the stable dedup / detectionId key."""
     if d.axis == "api" and "+" in d.identifier:
         return d.identifier.split("+", 1)[1]
     if d.axis == "service":
@@ -1960,37 +1961,34 @@ def _wire_name(d):
     return d.identifier
 
 
-def build_events(detections, customer, application, scan_id, timestamp,
-                 regions=None):
-    """Build the DETECTOR TelemetryEvent list.
+def build_detections(detections, customer, application, scan_id, timestamp,
+                     regions=None):
+    """Build the DETECTOR detection-record list for the results payload.
 
     Region policy:
-      * DEFAULT (regions is empty/None) — emit ONE region-less event per
-        detection. `region` is optional in the contract; when absent the backend
-        fans the event out across the Ready Partner customer's preferred regions
-        (one enriched row per region, server-side). This keeps region policy on
-        the backend and is the recommended mode.
+      * DEFAULT (regions is empty/None) — emit ONE region-less record per
+        detection. `region` is optional; when absent a consumer may fan the
+        record out across the customer's preferred regions (one enriched row per
+        region). This keeps region policy on the consumer and is the default.
       * EXPLICIT (regions given, e.g. from a positional region arg) — emit one
-        event per (detection x region) tagged with that region, for a customer
+        record per (detection x region) tagged with that region, for a customer
         who wants to preflight specific regions themselves.
 
-    Emits only what the detector knows: the core required fields plus `service`
+    Emits only what the detector knows: the core fields plus `service`
     (canonical SdkServiceId) and an `attributes` block carrying the detector's own
     detectionKind and serviceEndpointPrefix on the open seam. Both extension
-    signals live in `attributes` (the schema's open Document) rather than as
-    top-level fields — the TelemetryEvent model only defines the fields it knows,
-    and unknown top-level keys are silently dropped server-side. Availability/AI
-    fields are omitted by design (backend grades them). What we send mirrors what
-    the report displays."""
+    signals live in `attributes` (an open Document) rather than as top-level
+    fields, so a consumer can ignore unknown keys. What the payload contains
+    mirrors what the report displays."""
     region_list = regions if regions else [None]
-    events = []
+    records = []
     for d in detections:
         for region in region_list:
-            ev = {
+            rec = {
                 "schemaVersion": SCHEMA_VERSION,
-                "eventSource": EVENT_SOURCE,
-                "eventId": _event_id(scan_id, d.axis, d.service, d.identifier,
-                                     region),
+                "detectionSource": DETECTION_SOURCE,
+                "detectionId": _detection_id(scan_id, d.axis, d.service,
+                                             d.identifier, region),
                 "scanId": scan_id,
                 "timestamp": timestamp,
                 "customer": customer,
@@ -2003,53 +2001,47 @@ def build_events(detections, customer, application, scan_id, timestamp,
                 },
             }
             if region:
-                ev["region"] = region
+                rec["region"] = region
             # Always carry the canonical service when known — including on the
             # service axis — so every source (repo scan, CloudTrail) presents the
-            # same join key. (The schema makes `service` optional on axis=service,
-            # but populating it keeps sources consistent.)
+            # same join key.
             if d.service:
-                ev["service"] = d.service
+                rec["service"] = d.service
             # Emit the CloudTrail-style endpoint prefix alongside the
-            # SdkServiceId so the backend can join on whichever it uses
+            # SdkServiceId so a consumer can join on whichever it uses
             # (sdkServiceId or sdkEndpointPrefix) without translation. It goes in
-            # `attributes` (the schema's OPEN extension seam) — NOT as a top-level
-            # field: the TelemetryEvent Smithy model has no serviceEndpointPrefix
-            # member, so a top-level key is silently DROPPED server-side. attributes
-            # is a Document, so camelCase keys land without a schema bump.
+            # the open `attributes` block rather than as a top-level field, so a
+            # consumer that only knows the core fields can ignore it.
             if d.endpoint_prefix:
-                ev["attributes"]["serviceEndpointPrefix"] = d.endpoint_prefix
+                rec["attributes"]["serviceEndpointPrefix"] = d.endpoint_prefix
             # Forward extracted config/runtime properties (runtime, instanceType,
             # engineVersion, wildcardActions...) into the same open `attributes`
-            # seam so the backend receives the property depth, not just presence.
+            # block so a consumer receives the property depth, not just presence.
             # Each value is the sorted list of observed literals (may include the
-            # "<unresolved>" sentinel when no literal resolved). Camel/plain keys
-            # land in the Document without a schema bump (same rationale as
-            # serviceEndpointPrefix above).
+            # "<unresolved>" sentinel when no literal resolved).
             if d.attributes:
                 for attr_name, attr_vals in d.attributes.items():
-                    ev["attributes"][attr_name] = sorted(attr_vals)
-            events.append(ev)
+                    rec["attributes"][attr_name] = sorted(attr_vals)
+            records.append(rec)
     # Deterministic order: (region, axis, name, service).
-    events.sort(key=lambda e: (e.get("region", ""), e["axis"], e["name"],
-                               e.get("service", "")))
-    return events
+    records.sort(key=lambda r: (r.get("region", ""), r["axis"], r["name"],
+                                r.get("service", "")))
+    return records
 
 
-def write_payload(events, out_dir, run_id):
+def write_payload(records, out_dir, run_id):
     """Write the structured results payload locally. This is the file the customer
     hands to their AWS point of contact for ingestion (no automated upload).
     Returns the path."""
     path = os.path.join(out_dir, f"capabilities-payload-{run_id}.json")
     with open(path, "w") as f:
-        json.dump({"events": events}, f, indent=2)
+        json.dump({"detections": records}, f, indent=2)
     return path
 
 
 # --------------------------------------------------------------------------- #
 # Identity registry: remember customer/application per scanned target so a
-# re-run confirms (with option to edit) instead of asking cold. Consent is
-# NEVER remembered — it is the legal gate and is always re-asked per send.
+# re-run confirms (with option to edit) instead of asking cold.
 # --------------------------------------------------------------------------- #
 def _registry_path(out_dir):
     """State lives in the output dir (default: the current directory) — the same
@@ -2119,11 +2111,11 @@ def _print_manual_delivery_notice(out_dir, run_id, payload_path, error=None):
     print("=" * 70)
 
 
-def run_telemetry(detections, out_dir, run_id, args):
+def write_results_payload(detections, out_dir, run_id, args):
     """Collect the run's identity (customer/application), write the results
-    payload locally, and print the manual hand-off notice. Fully offline — no
-    network call, no credentials, no consent-to-send (there is nothing to send).
-    Interactive runs ask for customer/application; non-interactive uses --customer."""
+    payload locally, and print the hand-off notice. Fully offline — no network
+    call, no credentials. Interactive runs ask for customer/application;
+    non-interactive uses --customer."""
     import datetime
 
     interactive = sys.stdin.isatty()
@@ -2193,12 +2185,12 @@ def run_telemetry(detections, out_dir, run_id, args):
     # cold. Skipped for non-interactive one-off flag runs.
     if interactive:
         save_identity(args, out_dir, customer, application, timestamp)
-    events = build_events(detections, customer, application, scan_id, timestamp,
-                          regions=regions)
-    payload_path = write_payload(events, out_dir, run_id)
+    records = build_detections(detections, customer, application, scan_id,
+                               timestamp, regions=regions)
+    payload_path = write_payload(records, out_dir, run_id)
 
     region_note = (f"tagged for {', '.join(regions)}" if regions else "region-less")
-    print(f"\nResults payload: {len(events)} event(s) ({region_note})")
+    print(f"\nResults payload: {len(records)} detection(s) ({region_note})")
     print(f"  Customer:    {customer}")
     print(f"  Application: {application}")
 
@@ -2231,7 +2223,7 @@ def _parse_args(argv):
     p.add_argument("--quiet", action="store_true", help="suppress the table")
     # Results payload. The tool is fully offline — it writes a local results
     # payload and prints how to hand it to an AWS contact. It never uploads.
-    p.add_argument("--no-payload", "--no-send", dest="no_payload",
+    p.add_argument("--no-payload", dest="no_payload",
                    action="store_true",
                    help="detection/report only — skip writing the results payload")
     p.add_argument("--customer", default=None,
@@ -2290,7 +2282,7 @@ def main(argv):
     # Results payload + hand-off notice. Written by default; skip with
     # --no-payload. Fully local — nothing is uploaded.
     if not args.no_payload:
-        run_telemetry(detections, out_dir, run_id, args)
+        write_results_payload(detections, out_dir, run_id, args)
 
     return 0
 
