@@ -180,7 +180,6 @@ export class UsageAnalysisStack extends cdk.Stack {
     // CloudTrail Analyzer Lambda
     const cloudtrailAnalyzerLambdaName = `${prefix}CloudTrailAnalyzer`;
     const cloudtrailAnalyzerRole = new iam.CfnRole(this, `${cloudtrailAnalyzerLambdaName}Role`, {
-      roleName: cdk.Fn.sub(`${cloudtrailAnalyzerLambdaName}Role-\${AWS::Region}`),
       assumeRolePolicyDocument: {
         Version: '2012-10-17',
         Statement: [
@@ -315,9 +314,7 @@ export class UsageAnalysisStack extends cdk.Stack {
     // deploy` directly, not `cdk deploy`).
     const lakeFormationBootstrapLambdaName = `${prefix}LakeFormationBootstrapLambda`;
     const lakeFormationBootstrapRoleName = `${prefix}LakeFormationBootstrapLambdaRole`;
-    const lakeFormationBootstrapRoleNameFn = cdk.Fn.sub(`${lakeFormationBootstrapRoleName}-\${AWS::Region}`);
     const lakeFormationBootstrapRole = new iam.CfnRole(this, lakeFormationBootstrapRoleName, {
-      roleName: lakeFormationBootstrapRoleNameFn,
       assumeRolePolicyDocument: {
         Version: '2012-10-17',
         Statement: [
@@ -468,7 +465,6 @@ def lambda_handler(event, context):
     // which is only accessible from within the configured VPC.
     const cloudformationAnalyzerLambdaName = `${prefix}CloudFormationAnalyzer`;
     const cloudformationAnalyzerRole = new iam.CfnRole(this, `${cloudformationAnalyzerLambdaName}Role`, {
-      roleName: cdk.Fn.sub(`${cloudformationAnalyzerLambdaName}Role-\${AWS::Region}`),
       assumeRolePolicyDocument: {
         Version: '2012-10-17',
         Statement: [
@@ -543,7 +539,6 @@ def lambda_handler(event, context):
     // to the same bucket for the UI to consume.
     const usageDecoratorLambdaName = `${prefix}UsageDecorator`;
     const usageDecoratorRole = new iam.CfnRole(this, `${usageDecoratorLambdaName}Role`, {
-      roleName: cdk.Fn.sub(`${usageDecoratorLambdaName}Role-\${AWS::Region}`),
       assumeRolePolicyDocument: {
         Version: '2012-10-17',
         Statement: [
