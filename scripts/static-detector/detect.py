@@ -327,8 +327,12 @@ _CFN_PROPERTY_CATALOG = {
     "AWS::Glue::Job": {"GlueVersion": "glueVersion", "WorkerType": "workerType"},
 }
 
-# key: value  — captures the property name and the rest of the line as value.
-_CFN_KV_RE = re.compile(r'^(\s*)([A-Za-z0-9]+)\s*:\s*(.+?)\s*$')
+# key: value — captures the property name and the rest of the line as value.
+# Handles BOTH YAML (`Runtime: java17`) and JSON (`"Runtime": "java17",`) so the
+# same indent-based block-walk works on `cdk synth` JSON templates, not just
+# YAML. The key may be quoted; a trailing comma on the JSON value is stripped by
+# _clean_value.
+_CFN_KV_RE = re.compile(r'^(\s*)"?([A-Za-z0-9]+)"?\s*:\s*(.+?)\s*$')
 # A value we cannot resolve to a literal. Two families:
 #   CFN: intrinsics / refs / templating   (!Ref, !GetAtt, ${...}, Fn::, {, [)
 #   Terraform: variable & expression refs  (var.x, local.x, data.x, module.x,
@@ -697,6 +701,155 @@ def extract_tf_properties(text, rel_path):
         if cfn:
             out.append((cfn, rel_path, blk["props"]))
     return out
+
+
+# --------------------------------------------------------------------------- #
+# CDK L2 construct property extraction (source, no synth required).
+#
+# L2 constructs (`new lambda.Function(this, 'id', { runtime: ..., memorySize: })`)
+# carry config as constructor props. Many are plain literals ('nodejs20.x', 512)
+# which we extract directly. Some are enum/builder expressions
+# (ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO),
+# Runtime.NODEJS_20_X) which are NOT literals — for those we record the RAW
+# expression verbatim rather than dropping it, so the exact tokens (T3, MICRO,
+# NODEJS_20_X) survive for a downstream consumer to canonicalize. The detector
+# stays dumb and current-proof: it never maps enum -> string itself (that table
+# would go stale as AWS ships new types), it just reports what the code says.
+#
+# NOTE: `cdk synth` output supersedes this — a synthesized template resolves the
+# same props to literals, which extract_cfn_properties handles. This L2 pass is
+# the best-effort fallback when only raw source is available.
+# --------------------------------------------------------------------------- #
+# CDK construct class name -> (CFN type, {constructPropName: emitted attr name}).
+# Keyed by BOTH the L2 name (Function, Instance, DatabaseInstance) and the L1
+# CFN-leaf name (Function, Instance, DBInstance) since a caller may use either
+# `new lambda.Function(...)` or `new lambda.CfnFunction(...)`. The prop map
+# UNIONS the L2 and L1 property names (they often differ, e.g. L2 `instanceType`
+# vs L1 `dbInstanceClass` for RDS) so whichever the code uses, it binds.
+_CDK_L2_CONSTRUCT_CATALOG = {
+    # Lambda — L1 leaf "Function" == L2 "Function".
+    "Function":     ("AWS::Lambda::Function",
+                     {"runtime": "runtime", "memorySize": "memory",
+                      "timeout": "timeout", "architecture": "architecture"}),
+    # EC2 — L1 leaf "Instance" == L2 "Instance".
+    "Instance":     ("AWS::EC2::Instance",
+                     {"instanceType": "instanceType",
+                      "machineImage": "ami", "imageId": "ami"}),
+    # RDS instance — L2 "DatabaseInstance", L1 leaf "DBInstance".
+    "DatabaseInstance": ("AWS::RDS::DBInstance",
+                     {"engine": "engine", "engineVersion": "engineVersion",
+                      "instanceType": "instanceClass",
+                      "dbInstanceClass": "instanceClass",
+                      "allocatedStorage": "allocatedStorage"}),
+    "DBInstance":   ("AWS::RDS::DBInstance",
+                     {"engine": "engine", "engineVersion": "engineVersion",
+                      "instanceType": "instanceClass",
+                      "dbInstanceClass": "instanceClass",
+                      "allocatedStorage": "allocatedStorage"}),
+    # RDS cluster — L2 "DatabaseCluster", L1 leaf "DBCluster".
+    "DatabaseCluster": ("AWS::RDS::DBCluster",
+                     {"engine": "engine", "engineVersion": "engineVersion"}),
+    "DBCluster":    ("AWS::RDS::DBCluster",
+                     {"engine": "engine", "engineVersion": "engineVersion"}),
+    # ElastiCache — L1 leaf "CacheCluster" == L2 "CacheCluster".
+    "CacheCluster": ("AWS::ElastiCache::CacheCluster",
+                     {"engine": "engine", "engineVersion": "engineVersion",
+                      "cacheNodeType": "nodeType"}),
+    # DynamoDB — L2 "Table", L1 leaf "Table".
+    "Table":        ("AWS::DynamoDB::Table", {"billingMode": "billingMode"}),
+    # OpenSearch — L2 "Domain", L1 leaf "Domain".
+    "Domain":       ("AWS::OpenSearchService::Domain",
+                     {"version": "engineVersion", "engineVersion": "engineVersion"}),
+    # EKS — L2 "Cluster" (also generic; EKS L1 leaf is "Cluster").
+    "Cluster":      ("AWS::EKS::Cluster", {"version": "version"}),
+    # Glue job — L1 leaf "Job" == L2 "Job".
+    "Job":          ("AWS::Glue::Job",
+                     {"glueVersion": "glueVersion", "workerType": "workerType"}),
+}
+# `new <ns...>.<Construct>(` — captures the construct class name. Handles both
+# L2 (`Function`) and L1 (`CfnFunction`), and a multi-segment namespace like
+# `cdk.aws_lambda.CfnFunction`. The class is resolved against the catalog below
+# (an L1 `Cfn<Resource>` maps to the same catalog entry as its L2 sibling, since
+# CDK L1 props use the same camelCase names as L2).
+_CDK_L2_NEW_RE = re.compile(
+    r"\bnew\s+(?:[A-Za-z_][A-Za-z0-9_.]*\.)?(Cfn[A-Z][A-Za-z0-9]*|[A-Z][A-Za-z0-9]*)\s*\(")
+# A `propName: value,` inside a construct props object.
+_CDK_L2_PROP_RE = re.compile(r"^\s*([a-zA-Z][a-zA-Z0-9]*)\s*:\s*(.+?)\s*,?\s*$")
+
+
+def _cdk_value(raw):
+    """Value handling for a CDK L2 prop. A quoted string or bare number resolves
+    to that literal; anything else (an enum/builder expression like
+    InstanceType.of(...) or Runtime.NODEJS_20_X) is kept VERBATIM so the exact
+    tokens survive for a downstream consumer to canonicalize. Never guesses."""
+    v = raw.strip()
+    # Strip a trailing line comment that rode along (`// ...`), outside quotes.
+    # If the value starts with a quote, cut at its closing quote first.
+    if v[:1] in "'\"":
+        q = v[0]
+        end = v.find(q, 1)
+        if end != -1:
+            v = v[:end + 1]
+    else:
+        idx = v.find("//")
+        if idx != -1:
+            v = v[:idx]
+    v = v.strip().rstrip(",").strip()
+    if not v:
+        return None
+    # String literal.
+    if len(v) >= 2 and v[0] in "'\"" and v[-1] in "'\"":
+        return v[1:-1]
+    # Bare number (memorySize: 512).
+    if re.fullmatch(r"[0-9]+", v):
+        return v
+    # An expression / enum / reference — keep the raw text, trimmed of a
+    # trailing `.toString()` which is noise.
+    v = re.sub(r"\.toString\(\)\s*$", "", v)
+    return v
+
+
+def extract_cdk_l2_properties(text, rel_path):
+    """Extract config props from CDK L2 constructor calls. Returns
+    (cfn_type, rel_path, {attr: value}) per catalog construct instantiation.
+    Brace-depth tracks the props object; only DIRECT props (depth 1 inside the
+    constructor) bind, so nested option objects don't leak same-named keys."""
+    results = []
+    cur = None      # {"cfn": ..., "wanted": {...}, "props": {...}, "depth": int}
+    for line in text.splitlines():
+        if cur is None:
+            m = _CDK_L2_NEW_RE.search(line)
+            if m:
+                cls = m.group(1)
+                # L1 `CfnFunction` shares its config catalog with L2 `Function`.
+                lookup = cls[3:] if cls.startswith("Cfn") else cls
+                info = _CDK_L2_CONSTRUCT_CATALOG.get(lookup)
+                if info:
+                    cfn, wanted = info
+                    # Depth from this line onward (the `(` and any `{` on it).
+                    depth = line.count("{") - line.count("}")
+                    cur = {"cfn": cfn, "wanted": wanted, "props": {},
+                           "depth": depth}
+            continue
+        # Inside a construct call. Bind direct props (depth exactly 1 = inside
+        # the single props object). Check before updating depth for this line.
+        if cur["depth"] == 1:
+            pm = _CDK_L2_PROP_RE.match(line)
+            if pm:
+                key = pm.group(1)
+                if key in cur["wanted"] and cur["wanted"][key] not in cur["props"]:
+                    val = _cdk_value(pm.group(2))
+                    if val:
+                        cur["props"][cur["wanted"][key]] = val
+        cur["depth"] += line.count("{") - line.count("}")
+        # A closing paren at base depth ends the constructor call.
+        if cur["depth"] <= 0 or (cur["depth"] == 0):
+            if cur["props"]:
+                results.append((cur["cfn"], rel_path, cur["props"]))
+            cur = None
+    if cur and cur["props"]:
+        results.append((cur["cfn"], rel_path, cur["props"]))
+    return results
 
 
 def _tf_service_display(seg):
@@ -1093,6 +1246,30 @@ _CDK_IMPORT_RE = re.compile(
 # Matches the `aws_<service>` submodule token wherever it appears.
 _CDK_BARREL_RE = re.compile(r"\baws_([a-z0-9]+)\b")
 
+# L1 construct instantiation: `new <ns>.Cfn<Resource>(` (TS/JS) or
+# `<ns>.Cfn<Resource>(` (Python). L1 (Cfn*) constructs map 1:1 and unambiguously
+# to `AWS::<Service>::<Resource>` — that IS the CloudFormation naming contract —
+# so unlike an L2 import (which only implies the service's PRIMARY type), a
+# CfnInstance/CfnTable/CfnBucket pins the EXACT resource type at HIGH confidence.
+# `<ns>` is the imported alias (e.g. `ec2` from `aws_ec2 as ec2`); we resolve it
+# back to a service segment via the alias map built from the same imports.
+_CDK_L1_RE = re.compile(r"\bnew\s+([A-Za-z_][A-Za-z0-9_]*)\.Cfn([A-Za-z0-9]+)\s*\(")
+# Alias -> service segment, e.g. `import { aws_ec2 as ec2 }` gives ec2 -> ec2,
+# `import * as ec2 from 'aws-cdk-lib/aws-ec2'` gives ec2 -> ec2.
+_CDK_ALIAS_RE = re.compile(
+    r"(?:aws_([a-z0-9]+)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)"      # aws_ec2 as ec2
+    r"|\*\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s+from\s+['\"]aws-cdk-lib/aws-([a-z0-9]+)"  # * as ec2 from '.../aws-ec2'
+    r"|\{\s*([A-Za-z_][A-Za-z0-9_, ]*)\}\s*=\s*require\(['\"]aws-cdk-lib/aws-([a-z0-9]+))")
+
+# CFN service segment -> the AWS::<Service> namespace token used in resource
+# types. Most L2 import segments equal the CFN service lowercased, but a few
+# differ; reuse CDK_SERVICE's primary type to recover the exact casing.
+def _cfn_service_for_segment(seg):
+    info = CDK_SERVICE.get(seg)
+    if info:
+        return info[1].split("::")[1]   # e.g. "EC2" from "AWS::EC2::VPC"
+    return None
+
 
 def parse_cdk_imports(text, rel_path):
     """Detect AWS services + primary CFN types from CDK construct-library imports.
@@ -1109,7 +1286,40 @@ def parse_cdk_imports(text, rel_path):
     # Barrel form is only trusted when the file actually uses aws-cdk-lib /
     # aws_cdk, so a stray `aws_foo` variable elsewhere isn't misread as CDK.
     barrel_ok = ("aws-cdk-lib" in text or "aws_cdk" in text)
+    # Build an alias -> service-segment map so a `new ec2.CfnInstance(...)` can
+    # be tied back to the ec2 service. Covers `aws_ec2 as ec2`, `* as ec2 from
+    # '.../aws-ec2'`, and `{ aws_ec2 } = require('.../aws-ec2')`. Also map the
+    # bare submodule name to itself (namespaced use like `aws_ec2.CfnInstance`).
+    alias_to_seg = {}
+    for m in _CDK_ALIAS_RE.finditer(text):
+        seg1, alias1, alias2, seg2, _names, seg3 = m.groups()
+        if seg1 and alias1:
+            alias_to_seg[alias1] = seg1
+        if alias2 and seg2:
+            alias_to_seg[alias2] = seg2
+        if seg3:
+            alias_to_seg[seg3] = seg3
+    for m in _CDK_BARREL_RE.finditer(text):
+        alias_to_seg.setdefault(m.group(1), m.group(1))          # aws_ec2 -> ec2
+
     for line_num, line in enumerate(text.splitlines(), 1):
+        # L1 construct: `new <ns>.Cfn<Resource>(` pins the EXACT AWS::Svc::Res.
+        for m in _CDK_L1_RE.finditer(line):
+            ns, resource = m.group(1), m.group(2)
+            seg = alias_to_seg.get(ns)
+            svc = _cfn_service_for_segment(seg) if seg else None
+            # Fallback: if the alias literally IS a known segment (e.g. `ec2`),
+            # use it directly even without an explicit import alias line.
+            if not svc:
+                svc = _cfn_service_for_segment(ns)
+            if svc:
+                fqn = f"AWS::{svc}::{resource}"
+                detections.append(Detection(
+                    "cfn", fqn, svc, rel_path, line_num, "cdk-construct", "high"))
+                detections.append(Detection(
+                    "service", sdk_service_display(svc.lower()), svc,
+                    rel_path, line_num, "cdk-construct", "high"))
+
         is_cdk_line = "cdk" in line or "motecdk" in line
         if not is_cdk_line and not barrel_ok:
             continue
@@ -1467,10 +1677,38 @@ def collect_files(root):
            "manifests": [], "sources": [], "tfvars": []}
     for dirpath, dirnames, filenames in os.walk(root):
         base = os.path.basename(dirpath)
-        # Prune skip dirs, but keep cdk.out.
-        dirnames[:] = [d for d in dirnames
-                       if d not in SKIP_DIRS and not (d.startswith(".") and d not in (".",))]
-        in_synth = SYNTH_DIR in dirpath.split(os.sep)
+        # Prune skip dirs and hidden dirs, with two exceptions kept:
+        #   * cdk.out (and variants like cdk.out.dev) — synth output, our
+        #     highest-fidelity source.
+        #   * a normally-skipped dir (e.g. build/, dist/) that CONTAINS a cdk.out*
+        #     subdir — CDK's default output is build/cdk.out, so pruning build/
+        #     outright would silently drop all synth templates. Keep such dirs so
+        #     the walk can descend to the cdk.out inside; their non-synth files
+        #     are still ignored because only *.template.* under a synth path are
+        #     collected.
+        def _leads_to_synth(parent, d):
+            p = os.path.join(parent, d)
+            if d == SYNTH_DIR or d.startswith(SYNTH_DIR + "."):
+                return True
+            try:
+                for sub in os.listdir(p):
+                    if sub == SYNTH_DIR or sub.startswith(SYNTH_DIR + "."):
+                        return True
+            except OSError:
+                pass
+            return False
+        dirnames[:] = [
+            d for d in dirnames
+            if (d not in SKIP_DIRS
+                and not (d.startswith(".") and d not in (".",)))
+            or _leads_to_synth(dirpath, d)]
+        # A path is "synth output" if ANY segment is cdk.out or a variant like
+        # cdk.out.dev / cdk.out.sampleenv (a repo with multiple CDK apps synths
+        # each to its own suffixed dir). Exact-match-only silently missed these
+        # and fell back to source-only, under-reporting resolved config.
+        segs = dirpath.split(os.sep)
+        in_synth = any(s == SYNTH_DIR or s.startswith(SYNTH_DIR + ".")
+                       for s in segs)
         for fn in filenames:
             full = os.path.join(dirpath, fn)
             if os.path.abspath(full) in _SELF_FILES:
@@ -1602,6 +1840,22 @@ def detect(root, cloudtrail_path=None):
         bucket = cfn_props.setdefault(cfn_type, {})
         for attr, raw in props.items():
             bucket.setdefault(attr, set()).update(resolve_value(raw, symbols))
+
+    # CDK L2 source props: values are already final (literal or verbatim enum
+    # expression), so they merge straight in without going through resolve_value
+    # (which would treat an enum expression as unresolved). Scanned here so the
+    # synth path — extract_cfn_properties above — takes precedence when present.
+    def _absorb_cdk_l2(entries):
+        for cfn_type, _rp, props in entries:
+            bucket = cfn_props.setdefault(cfn_type, {})
+            for attr, val in props.items():
+                bucket.setdefault(attr, set()).add(val)
+    for full in files["sources"]:
+        ext = os.path.splitext(full)[1].lower()
+        if ext in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
+            text = _read(full)
+            if text and ("cdk" in text or "aws-cdk-lib" in text):
+                _absorb_cdk_l2(extract_cdk_l2_properties(text, rel(full)))
 
     for full in files["manifests"]:
         text = _read(full)
