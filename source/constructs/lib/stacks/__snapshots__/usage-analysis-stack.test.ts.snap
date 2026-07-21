@@ -371,9 +371,6 @@ exports[`CloudFormation template matches snapshot 1`] = `
             "PolicyName": "S3WriteAccess",
           },
         ],
-        "RoleName": {
-          "Fn::Sub": "CapabilityInsightsCloudFormationAnalyzerRole-\${AWS::Region}",
-        },
       },
       "Type": "AWS::IAM::Role",
     },
@@ -596,9 +593,6 @@ exports[`CloudFormation template matches snapshot 1`] = `
             "PolicyName": "S3WriteAccess",
           },
         ],
-        "RoleName": {
-          "Fn::Sub": "CapabilityInsightsCloudTrailAnalyzerRole-\${AWS::Region}",
-        },
       },
       "Type": "AWS::IAM::Role",
     },
@@ -870,9 +864,6 @@ def lambda_handler(event, context):
             "PolicyName": "LakeFormationBootstrap",
           },
         ],
-        "RoleName": {
-          "Fn::Sub": "CapabilityInsightsLakeFormationBootstrapLambdaRole-\${AWS::Region}",
-        },
       },
       "Type": "AWS::IAM::Role",
     },
@@ -1031,9 +1022,6 @@ def lambda_handler(event, context):
             "PolicyName": "S3WriteUsedFiles",
           },
         ],
-        "RoleName": {
-          "Fn::Sub": "CapabilityInsightsUsageDecoratorRole-\${AWS::Region}",
-        },
       },
       "Type": "AWS::IAM::Role",
     },
