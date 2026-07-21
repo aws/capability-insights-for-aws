@@ -208,9 +208,6 @@ exports[`CloudFormation template matches snapshot 1`] = `
             "PolicyName": "BulkRefreshAccess",
           },
         ],
-        "RoleName": {
-          "Fn::Sub": "CapabilityInsightsPolicyEnforcerBulkRefreshRole-\${AWS::Region}",
-        },
       },
       "Type": "AWS::IAM::Role",
     },
@@ -332,9 +329,6 @@ exports[`CloudFormation template matches snapshot 1`] = `
             "PolicyName": "PolicyEnforcerIamManagement",
           },
         ],
-        "RoleName": {
-          "Fn::Sub": "CapabilityInsightsPolicyEnforcerIamHelperRole-\${AWS::Region}",
-        },
       },
       "Type": "AWS::IAM::Role",
     },

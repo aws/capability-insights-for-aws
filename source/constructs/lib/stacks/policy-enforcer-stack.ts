@@ -131,10 +131,9 @@ export class PolicyEnforcerStack extends cdk.Stack {
     this.iamHelperLambdaName = iamHelperLambdaName;
 
     const iamHelperRole = new iam.Role(this, `${iamHelperLambdaName}Role`, {
-      // The logical ID is pinned below via overrideLogicalId so this
-      // hardcoded physical name stays consistent with it. See the
-      // DynamoDB table above for the reasoning.
-      roleName: cdk.Fn.sub(`${iamHelperLambdaName}Role-\${AWS::Region}`),
+      // Logical ID is pinned via overrideLogicalId (below) to keep it stable
+      // across deploys. The physical role name is left for CloudFormation to
+      // generate — no need to force one (auto-names are always within limits).
       description:
         'Execution role for the Policy Enforcer IAM Helper Lambda. Scoped to PolicyEnforcer-* managed policies only.',
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
@@ -211,7 +210,6 @@ export class PolicyEnforcerStack extends cdk.Stack {
 
     const refreshRole = new iam.Role(this, `${refreshLambdaName}Role`, {
       // Logical ID pinned below — see the IAM Helper role above for the rationale.
-      roleName: cdk.Fn.sub(`${refreshLambdaName}Role-\${AWS::Region}`),
       description: 'Execution role for the Policy Enforcer bulk refresh Lambda.',
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
       managedPolicies: [
