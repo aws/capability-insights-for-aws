@@ -348,6 +348,7 @@ export default function CapabilityByRegion() {
                   regions={regions}
                   regionalAvailability={productRows}
                   downloadUrls={capabilityInsightsClient.exportUrls(DataFile.PRODUCTS)}
+                  enableTimeframeFilter
                   nameCell={row => (
                     <SpaceBetween direction="horizontal" size="xs">
                       {row.homepageUrl ? (
