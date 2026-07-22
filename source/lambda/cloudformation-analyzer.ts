@@ -98,8 +98,7 @@ function processTemplate(
   aggregated: Record<string, Record<string, Record<string, Set<string>>>>,
 ): void {
   const resources = template.Resources as
-    | Record<string, { Type?: string; Properties?: Record<string, unknown> }>
-    | undefined;
+    Record<string, { Type?: string; Properties?: Record<string, unknown> }> | undefined;
   if (!resources) return;
 
   for (const resource of Object.values(resources)) {

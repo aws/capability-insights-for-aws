@@ -3,7 +3,11 @@ import type { PropertyFilterProps } from '@cloudscape-design/components/property
 import CollectionPreferences, {
   type CollectionPreferencesProps,
 } from '@cloudscape-design/components/collection-preferences';
-import type { PropertyFilterQuery, PropertyFilterToken } from '@cloudscape-design/collection-hooks';
+import type {
+  PropertyFilterQuery,
+  PropertyFilterToken,
+  PropertyFilterTokenGroup,
+} from '@cloudscape-design/collection-hooks';
 import type { Region } from '@capability-insights/shared/types/capability/region';
 import type { RegionalAvailability } from '@capability-insights/shared/types/availability/regional-availability';
 import type { AvailabilityStatus } from '@capability-insights/shared/types/availability/availability-status';
@@ -32,28 +36,26 @@ export function createColumns({
       isRowHeader: true,
       width: 500,
     },
-    ...regions.map(
-      (r): TableProps.ColumnDefinition<RegionalAvailability> => ({
-        id: r.Region,
-        header: (
-          <span>
-            {r.RegionLongName.replace(/^.*\((.+)\)$/, '$1')}
-            <br />
-            <small>{r.Region}</small>
-          </span>
-        ),
-        width: 160,
-        cell: row => {
-          if (!row.regionalAvailability) return null;
-          return (
-            <AvailabilityStatusIndicator
-              status={(row.regionalAvailability[r.Region] as AvailabilityStatus) ?? null}
-              launchDate={row.regionDates?.[r.Region]}
-            />
-          );
-        },
-      }),
-    ),
+    ...regions.map((r): TableProps.ColumnDefinition<RegionalAvailability> => ({
+      id: r.Region,
+      header: (
+        <span>
+          {r.RegionLongName.replace(/^.*\((.+)\)$/, '$1')}
+          <br />
+          <small>{r.Region}</small>
+        </span>
+      ),
+      width: 160,
+      cell: row => {
+        if (!row.regionalAvailability) return null;
+        return (
+          <AvailabilityStatusIndicator
+            status={(row.regionalAvailability[r.Region] as AvailabilityStatus) ?? null}
+            launchDate={row.regionDates?.[r.Region]}
+          />
+        );
+      },
+    })),
   ];
 }
 
@@ -87,33 +89,18 @@ export function createFilteringProperties(
   ];
 }
 
-/**
- * Creates a filtering function that handles regular properties, region
- * availability lookups (keys prefixed with "region:"), and parent-chain
- * inheritance. When a parent matches, its children are included too.
- */
 export function createFilteringFunction(items: RegionalAvailability[]) {
   const byId = new Map(items.map(i => [i.id, i]));
-  const matchedIds = new Set<string>();
 
-  const resolveKnownKey = (item: RegionalAvailability, key: string): string | undefined => {
+  const resolveValue = (item: RegionalAvailability, key: string): string | undefined => {
     if (key === 'name') return item.name;
     if (key === 'regionalAvailabilityType') return item.regionalAvailabilityType;
     if (key === 'stack') return item.stacks?.join(',');
+    if (key.startsWith('region:')) return item.regionalAvailability?.[key.slice(7)];
     return undefined;
   };
 
-  const resolve = (item: RegionalAvailability, key: string): string | undefined => {
-    let current: RegionalAvailability | undefined = item;
-    while (current) {
-      const value = resolveKnownKey(current, key);
-      if (value !== undefined) return value;
-      current = current.parentId ? byId.get(current.parentId) : undefined;
-    }
-    return undefined;
-  };
-
-  const tokenMatches = (value: string | undefined, token: PropertyFilterToken, key?: string): boolean => {
+  const tokenMatchesValue = (value: string | undefined, token: PropertyFilterToken, key: string): boolean => {
     if (key === 'stack' && value) {
       const stackValues = value.split(',');
       const tokenValues: string[] = Array.isArray(token.value) ? token.value : [token.value];
@@ -148,52 +135,60 @@ export function createFilteringFunction(items: RegionalAvailability[]) {
     }
   };
 
-  const matchesTokens = (
+  const isTokenGroup = (t: PropertyFilterToken | PropertyFilterTokenGroup): t is PropertyFilterTokenGroup => {
+    return 'operation' in t && 'tokens' in t;
+  };
+
+  const evaluateTokenOrGroup = (
     item: RegionalAvailability,
-    tokens: readonly PropertyFilterToken[],
-    operation: PropertyFilterQuery['operation'],
+    tokenOrGroup: PropertyFilterToken | PropertyFilterTokenGroup,
   ): boolean => {
-    // Tokens without a propertyKey (free text, token groups) are not evaluated
-    // and act as "no constraint", preserving longstanding behavior.
-    const evaluableTokens = tokens.filter(token => token.propertyKey);
-    if (evaluableTokens.length === 0) return true;
-
-    const matchesToken = (token: PropertyFilterToken): boolean => {
-      const isRegion = token.propertyKey!.startsWith('region:');
-      const value = isRegion
-        ? item.regionalAvailability?.[token.propertyKey!.slice(7)]
-        : resolve(item, token.propertyKey!);
-      return tokenMatches(value, token, token.propertyKey);
-    };
-
-    return operation === 'or' ? evaluableTokens.some(matchesToken) : evaluableTokens.every(matchesToken);
-  };
-
-  const hasMatchedAncestor = (item: RegionalAvailability): boolean => {
-    let current = item.parentId ? byId.get(item.parentId) : undefined;
-    while (current) {
-      if (matchedIds.has(current.id)) return true;
-      current = current.parentId ? byId.get(current.parentId) : undefined;
+    if (isTokenGroup(tokenOrGroup)) {
+      const { operation, tokens } = tokenOrGroup;
+      if (tokens.length === 0) return true;
+      return operation === 'or'
+        ? tokens.some(t => evaluateTokenOrGroup(item, t))
+        : tokens.every(t => evaluateTokenOrGroup(item, t));
     }
-    return false;
+
+    const token = tokenOrGroup;
+    if (!token.propertyKey) {
+      const name = item.name?.toLowerCase() ?? '';
+      const tokenValue = String(token.value).toLowerCase();
+      switch (token.operator) {
+        case ':':
+          return name.includes(tokenValue);
+        case '!:':
+          return !name.includes(tokenValue);
+        case '=':
+          return name === tokenValue;
+        case '!=':
+          return name !== tokenValue;
+        default:
+          return name.includes(tokenValue);
+      }
+    }
+
+    const value = resolveValue(item, token.propertyKey);
+    return tokenMatchesValue(value, token, token.propertyKey);
   };
 
-  let lastQuery: PropertyFilterQuery | null = null;
+  const itemMatchesQuery = (item: RegionalAvailability, query: PropertyFilterQuery): boolean => {
+    const entries = query.tokenGroups ?? query.tokens;
+    if (!entries || entries.length === 0) return true;
+    return evaluateTokenOrGroup(item, { operation: query.operation, tokens: entries });
+  };
 
   return (item: RegionalAvailability, query: PropertyFilterQuery): boolean => {
-    if (query !== lastQuery) {
-      matchedIds.clear();
-      lastQuery = query;
+    if (itemMatchesQuery(item, query)) return true;
+
+    let ancestor = item.parentId ? byId.get(item.parentId) : undefined;
+    while (ancestor) {
+      if (itemMatchesQuery(ancestor, query)) return true;
+      ancestor = ancestor.parentId ? byId.get(ancestor.parentId) : undefined;
     }
 
-    const tokens = query.tokenGroups ?? query.tokens;
-
-    if (matchesTokens(item, tokens as readonly PropertyFilterToken[], query.operation)) {
-      matchedIds.add(item.id);
-      return true;
-    }
-
-    return hasMatchedAncestor(item);
+    return false;
   };
 }
 

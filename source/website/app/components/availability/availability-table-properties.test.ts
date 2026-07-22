@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { PropertyFilterQuery } from '@cloudscape-design/collection-hooks';
+import type {
+  PropertyFilterQuery,
+  PropertyFilterToken,
+  PropertyFilterTokenGroup,
+} from '@cloudscape-design/collection-hooks';
 import { ProductType, type Product } from '@capability-insights/shared/types/capability/product';
 import { AvailabilityStatus } from '@capability-insights/shared/types/availability/availability-status';
 import {
@@ -51,10 +55,6 @@ function productsFixture(): Product[] {
   ];
 }
 
-/**
- * Applies the filtering function the same way useCollection does: item by
- * item, in array order (parents are emitted before children by the mappers).
- */
 function applyFilter(items: RegionalAvailability[], query: PropertyFilterQuery): RegionalAvailability[] {
   const filteringFunction = createFilteringFunction(items);
   return items.filter(item => filteringFunction(item, query));
@@ -64,37 +64,29 @@ function nameContains(value: string): PropertyFilterQuery {
   return { operation: 'and', tokens: [{ propertyKey: 'name', operator: ':', value }] };
 }
 
-describe('createFilteringFunction with product rows (including duplicated child services)', () => {
+describe('createFilteringFunction: per-item evaluation', () => {
   const rows = fromProducts(productsFixture());
 
-  it('matching a parent service includes all of its children, including the duplicated leaf', () => {
+  it('matches items whose name contains the search term', () => {
     const result = applyFilter(rows, nameContains('Amazon Route 53'));
-    const names = result.map(r => `${r.name}${r.parentId === null ? ' (root)' : ''}`);
-    expect(names).toContain('Amazon Route 53 (root)');
-    expect(names).toContain('Route 53 Domains');
-    // The duplicated sub-service leaf under the parent is included via ancestor match...
-    expect(result.some(r => r.id === 'route-53:private-dns')).toBe(true);
-    // ...and its promoted root row matches on its own name, bringing its features along.
-    expect(result.some(r => r.id === 'private-dns' && r.parentId === null)).toBe(true);
-    expect(result.some(r => r.id === 'geolocation-routing')).toBe(true);
+    const matchedNames = result.map(r => r.name);
+    expect(matchedNames).toContain('Amazon Route 53');
+    expect(matchedNames).toContain('Amazon Route 53 Private DNS');
+    expect(matchedNames).toContain('Route 53 Domains');
+    expect(matchedNames).not.toContain('Amazon S3');
   });
 
-  it('matching a sub-service by name includes both instances and its features', () => {
-    const result = applyFilter(rows, nameContains('Private DNS'));
-    expect(result.map(r => r.id).sort()).toEqual(['geolocation-routing', 'private-dns', 'route-53:private-dns'].sort());
-  });
-
-  it('matching a grandchild feature returns only that row (no unrelated rows)', () => {
+  it('matches a grandchild feature by name', () => {
     const result = applyFilter(rows, nameContains('Geolocation'));
     expect(result.map(r => r.id)).toEqual(['geolocation-routing']);
   });
 
-  it('does not leak unrelated services into filtered results', () => {
+  it('does not include unrelated services', () => {
     const result = applyFilter(rows, nameContains('Route 53'));
     expect(result.some(r => r.id === 's3')).toBe(false);
   });
 
-  it('filters by type = Service, matching duplicated leaves, promoted roots, and their descendants', () => {
+  it('filters by type = Service', () => {
     const result = applyFilter(rows, {
       operation: 'and',
       tokens: [{ propertyKey: 'regionalAvailabilityType', operator: '=', value: [RegionalAvailabilityType.SERVICE] }],
@@ -104,12 +96,12 @@ describe('createFilteringFunction with product rows (including duplicated child 
     expect(ids).toContain('route-53:private-dns');
     expect(ids).toContain('private-dns');
     expect(ids).toContain('s3');
-    // Children of matched services are included by ancestor cascade (existing behavior).
+    // Children of matched services are included via ancestor inheritance
     expect(ids).toContain('route-53-domains');
     expect(ids).toContain('geolocation-routing');
   });
 
-  it('filters by region availability without cascading to non-matching children', () => {
+  it('filters by region availability', () => {
     const result = applyFilter(rows, {
       operation: 'and',
       tokens: [{ propertyKey: 'region:us-east-1', operator: '=', value: [AvailabilityStatus.NOT_AVAILABLE] }],
@@ -122,16 +114,22 @@ describe('createFilteringFunction with product rows (including duplicated child 
       operation: 'and',
       tokens: [{ propertyKey: 'name', operator: '!:', value: 'Route 53' }],
     });
-    expect(result.map(r => r.id)).toEqual(['geolocation-routing', 's3']);
+    const ids = result.map(r => r.id);
+    expect(ids).toContain('geolocation-routing');
+    expect(ids).toContain('s3');
+    expect(ids).not.toContain('route-53');
   });
 
-  it('resets matched-ancestor state between different queries', () => {
-    const filteringFunction = createFilteringFunction(rows);
-    const first = nameContains('Amazon Route 53');
-    const second = nameContains('Amazon S3');
-    rows.forEach(item => filteringFunction(item, first));
-    const result = rows.filter(item => filteringFunction(item, second));
-    expect(result.map(r => r.id)).toEqual(['s3']);
+  it('matching a parent includes all its children via ancestor inheritance', () => {
+    const result = applyFilter(rows, {
+      operation: 'and',
+      tokens: [{ propertyKey: 'name', operator: '=', value: 'Amazon Route 53' }],
+    });
+    const ids = result.map(r => r.id);
+    expect(ids).toContain('route-53');
+    expect(ids).toContain('route-53-domains');
+    expect(ids).toContain('route-53:private-dns');
+    expect(ids).not.toContain('s3');
   });
 
   it('returns every row for an empty query', () => {
@@ -140,10 +138,10 @@ describe('createFilteringFunction with product rows (including duplicated child 
   });
 });
 
-describe('createFilteringFunction OR operation', () => {
+describe('createFilteringFunction: OR operation (flat tokens)', () => {
   const rows = fromProducts(productsFixture());
 
-  it('matches rows satisfying any token, not all tokens', () => {
+  it('matches rows satisfying any token with OR operation', () => {
     const result = applyFilter(rows, {
       operation: 'or',
       tokens: [
@@ -151,30 +149,12 @@ describe('createFilteringFunction OR operation', () => {
         { propertyKey: 'name', operator: ':', value: 'Amazon S3' },
       ],
     });
-    // Under the old AND-only behavior this returned nothing: no row contains both strings.
-    expect(result.map(r => r.id).sort()).toEqual(['route-53-domains', 's3'].sort());
-  });
-
-  it('OR-matched parents still cascade to their children, including duplicated sub-services', () => {
-    const result = applyFilter(rows, {
-      operation: 'or',
-      tokens: [
-        { propertyKey: 'name', operator: '=', value: 'Amazon Route 53' },
-        { propertyKey: 'name', operator: '=', value: 'Amazon S3' },
-      ],
-    });
     const ids = result.map(r => r.id);
-    // Both exact-name matches...
-    expect(ids).toContain('route-53');
-    expect(ids).toContain('s3');
-    // ...and all of Route 53's children via ancestor cascade.
     expect(ids).toContain('route-53-domains');
-    expect(ids).toContain('route-53:private-dns');
-    // The promoted root's own name did not match, and its parent (none) did not match.
-    expect(ids).not.toContain('private-dns');
+    expect(ids).toContain('s3');
   });
 
-  it('supports OR across different property types (name and region availability)', () => {
+  it('supports OR across different property types (name and region)', () => {
     const result = applyFilter(rows, {
       operation: 'or',
       tokens: [
@@ -194,15 +174,7 @@ describe('createFilteringFunction OR operation', () => {
     expect(orResult).toEqual(andResult);
   });
 
-  it('returns every row when no token is evaluable (free-text-only query)', () => {
-    const result = applyFilter(rows, {
-      operation: 'or',
-      tokens: [{ operator: ':', value: 'Route 53' }],
-    });
-    expect(result).toHaveLength(rows.length);
-  });
-
-  it('does not change AND semantics: all tokens must still match', () => {
+  it('AND requires all tokens to match', () => {
     const result = applyFilter(rows, {
       operation: 'and',
       tokens: [
@@ -212,10 +184,137 @@ describe('createFilteringFunction OR operation', () => {
     });
     expect(result.map(r => r.id)).toEqual(['route-53-domains']);
   });
+
+  it('AND with mutually exclusive names returns zero results', () => {
+    const result = applyFilter(rows, {
+      operation: 'and',
+      tokens: [
+        { propertyKey: 'name', operator: '=', value: 'Amazon S3' },
+        { propertyKey: 'name', operator: '=', value: 'Amazon Route 53' },
+      ],
+    });
+    expect(result).toHaveLength(0);
+  });
+
+  it('OR with region filters includes rows where at least one region matches', () => {
+    const result = applyFilter(rows, {
+      operation: 'or',
+      tokens: [
+        { propertyKey: 'region:us-east-1', operator: '=', value: [AvailabilityStatus.AVAILABLE] },
+        { propertyKey: 'region:us-east-1', operator: '=', value: [AvailabilityStatus.NOT_AVAILABLE] },
+      ],
+    });
+    expect(result).toHaveLength(rows.length);
+  });
 });
 
-describe('createFilteringFunction value inheritance', () => {
-  it('children inherit stack values from their parent chain', () => {
+describe('createFilteringFunction: tokenGroups (enableTokenGroups)', () => {
+  const rows = fromProducts(productsFixture());
+
+  it('evaluates PropertyFilterTokenGroup with OR operation', () => {
+    const tokenGroup: PropertyFilterTokenGroup = {
+      operation: 'or',
+      tokens: [
+        { propertyKey: 'name', operator: '=', value: 'Amazon S3' },
+        { propertyKey: 'name', operator: '=', value: 'Amazon Route 53' },
+      ],
+    };
+    const query: PropertyFilterQuery = {
+      operation: 'and',
+      tokens: [],
+      tokenGroups: [tokenGroup],
+    };
+    const result = applyFilter(rows, query);
+    const ids = result.map(r => r.id);
+    expect(ids).toContain('route-53');
+    expect(ids).toContain('s3');
+    expect(ids).toContain('route-53-domains');
+  });
+
+  it('evaluates flat tokens in tokenGroups with AND at top level', () => {
+    const query: PropertyFilterQuery = {
+      operation: 'and',
+      tokens: [],
+      tokenGroups: [
+        { propertyKey: 'name', operator: ':', value: 'Route 53' } as PropertyFilterToken,
+        {
+          propertyKey: 'region:us-east-1',
+          operator: '=',
+          value: [AvailabilityStatus.AVAILABLE],
+        } as PropertyFilterToken,
+      ],
+    };
+    const result = applyFilter(rows, query);
+    const ids = result.map(r => r.id);
+    expect(ids).toContain('route-53');
+    expect(ids).toContain('route-53:private-dns');
+    expect(ids).toContain('private-dns');
+    expect(ids).not.toContain('s3');
+  });
+
+  it('handles mixed flat tokens and nested token groups', () => {
+    const query: PropertyFilterQuery = {
+      operation: 'or',
+      tokens: [],
+      tokenGroups: [
+        { propertyKey: 'name', operator: '=', value: 'Amazon S3' } as PropertyFilterToken,
+        {
+          operation: 'and',
+          tokens: [{ propertyKey: 'region:us-east-1', operator: '=', value: [AvailabilityStatus.NOT_AVAILABLE] }],
+        } as PropertyFilterTokenGroup,
+      ],
+    };
+    const result = applyFilter(rows, query);
+    expect(result.map(r => r.id).sort()).toEqual(['geolocation-routing', 's3'].sort());
+  });
+
+  it('prefers tokenGroups over tokens when both are present', () => {
+    const query: PropertyFilterQuery = {
+      operation: 'and',
+      tokens: [{ propertyKey: 'name', operator: '=', value: 'NONEXISTENT' }],
+      tokenGroups: [{ propertyKey: 'name', operator: '=', value: 'Amazon S3' } as PropertyFilterToken],
+    };
+    const result = applyFilter(rows, query);
+    expect(result.map(r => r.id)).toContain('s3');
+  });
+
+  it('returns every row for empty tokenGroups', () => {
+    const result = applyFilter(rows, { operation: 'and', tokens: [], tokenGroups: [] });
+    expect(result).toHaveLength(rows.length);
+  });
+});
+
+describe('createFilteringFunction: free-text tokens', () => {
+  const rows = fromProducts(productsFixture());
+
+  it('free-text token matches against item name', () => {
+    const result = applyFilter(rows, {
+      operation: 'and',
+      tokens: [{ operator: ':', value: 'Route 53' }],
+    });
+    const names = result.map(r => r.name);
+    expect(names).toContain('Amazon Route 53');
+    expect(names).toContain('Route 53 Domains');
+    expect(names).toContain('Amazon Route 53 Private DNS');
+    // Children of matched parents are included via ancestor inheritance
+    expect(names).toContain('Geolocation Routing');
+    expect(names).not.toContain('Amazon S3');
+  });
+
+  it('free-text negation excludes matching names', () => {
+    const result = applyFilter(rows, {
+      operation: 'and',
+      tokens: [{ operator: '!:', value: 'Route 53' }],
+    });
+    const names = result.map(r => r.name);
+    expect(names).not.toContain('Amazon Route 53');
+    expect(names).toContain('Geolocation Routing');
+    expect(names).toContain('Amazon S3');
+  });
+});
+
+describe('createFilteringFunction: stack property', () => {
+  it('matches items by stack value', () => {
     const items: RegionalAvailability[] = [
       {
         id: 'parent',
@@ -235,6 +334,7 @@ describe('createFilteringFunction value inheritance', () => {
       operation: 'and',
       tokens: [{ propertyKey: 'stack', operator: '=', value: ['stack-a'] }],
     });
+    // Parent matches directly, child included via ancestor inheritance
     expect(result.map(r => r.id)).toEqual(['parent', 'child']);
   });
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCollection } from '@cloudscape-design/collection-hooks';
 import Table from '@cloudscape-design/components/table';
 import PropertyFilter from '@cloudscape-design/components/property-filter';
@@ -83,6 +83,31 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
   });
 
   const allExpanded = hasNesting && (collectionProps.expandableRows?.expandedItems.length ?? 0) > 0;
+
+  const { query } = propertyFilterProps;
+  const hasActiveFilter = (query.tokenGroups?.length ?? 0) > 0 || query.tokens.length > 0;
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
+  const prevQueryRef = useRef(query);
+
+  useEffect(() => {
+    if (query === prevQueryRef.current) return;
+    prevQueryRef.current = query;
+
+    if (!hasNesting || !collectionProps.expandableRows) return;
+
+    if (hasActiveFilter) {
+      const parentsToExpand = collectionItems.filter(item => {
+        if (!collectionProps.expandableRows!.isItemExpandable(item)) return false;
+        return !filteringFunction(item, query);
+      });
+      if (parentsToExpand.length > 0) {
+        actionsRef.current.setExpandedItems(parentsToExpand);
+      }
+    } else {
+      actionsRef.current.setExpandedItems([]);
+    }
+  });
 
   const regionOptionValues = Object.values(AvailabilityStatus);
   const regionFilteringOptions = regions.flatMap(r =>

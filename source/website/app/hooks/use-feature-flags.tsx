@@ -12,9 +12,7 @@ import { capabilityInsightsClient } from '~/clients/capability-insights-client';
  *   to avoid showing controls that won't work.
  */
 type FeatureFlagsState =
-  | { status: 'loading'; flags: null }
-  | { status: 'ready'; flags: FeatureFlags }
-  | { status: 'error'; flags: null };
+  { status: 'loading'; flags: null } | { status: 'ready'; flags: FeatureFlags } | { status: 'error'; flags: null };
 
 interface FeatureFlagsContextValue {
   state: FeatureFlagsState;
