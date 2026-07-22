@@ -19,6 +19,7 @@ import {
   createFilteringFunction,
   TablePreferences,
 } from './availability-table-properties';
+import { deriveTimeframeOptions } from '~/utils/planning-timeframe';
 
 interface AvailabilityTableProps<T extends RegionalAvailability> {
   title: string;
@@ -29,6 +30,7 @@ interface AvailabilityTableProps<T extends RegionalAvailability> {
   downloadUrls: ExportUrls;
   loading?: boolean;
   extraFilteringProperties?: PropertyFilterProps.FilteringProperty[];
+  enableTimeframeFilter?: boolean;
 }
 
 export default function AvailabilityTable<T extends RegionalAvailability>({
@@ -40,6 +42,7 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
   downloadUrls,
   loading = false,
   extraFilteringProperties,
+  enableTimeframeFilter = false,
 }: AvailabilityTableProps<T>) {
   const [preferences, setPreferences] = useState<CollectionPreferencesProps.Preferences>({
     stickyColumns: { first: 1, last: 0 },
@@ -50,7 +53,7 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
     regions,
     nameCell: nameCell as (row: RegionalAvailability) => React.ReactNode,
   });
-  const filteringProperties = createFilteringProperties(regions, extraFilteringProperties);
+  const filteringProperties = createFilteringProperties(regions, extraFilteringProperties, enableTimeframeFilter);
   const filteringFunction = useMemo(() => createFilteringFunction(regionalAvailability), [regionalAvailability]);
 
   const hasNesting = regionalAvailability.some(i => i.parentId !== null);
@@ -123,10 +126,24 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
     return Array.from(stacks).map(s => ({ propertyKey: 'stack', value: s }));
   }, [regionalAvailability]);
 
+  // Derive planning timeframe options from launch dates in the data
+  const timeframeFilteringOptions = useMemo(
+    () =>
+      enableTimeframeFilter
+        ? deriveTimeframeOptions(regionalAvailability).map(opt => ({
+            propertyKey: 'planningTimeframe',
+            value: opt.value,
+            label: opt.label,
+          }))
+        : [],
+    [regionalAvailability, enableTimeframeFilter],
+  );
+
   const filteringOptions = [
     ...propertyFilterProps.filteringOptions,
     ...regionFilteringOptions,
     ...stackFilteringOptions,
+    ...timeframeFilteringOptions,
   ];
 
   return (

@@ -316,15 +316,27 @@ Click the info icon in the top-right corner to open the help panel. It explains 
 
 ![Help panel](docs/images/user-guide-help-panel.png)
 
+### Filtering by Planning Timeframe
+
+To see a roadmap view of upcoming launches, add a **Planning timeframe** filter from the filter bar. Pick one or more quarters (the values are derived from the launch dates present in the catalog) and the table narrows to capabilities with a planned launch in those quarters. Combine it with a region filter to scope the roadmap to a single region — for example, `eu-west-2 = Planned` plus `Planning timeframe = 2026 Q4` shows only what is committed for that region in 2026 Q4. Items already available in the filtered region are excluded; historical launch dates never match.
+
+![Planning timeframe filter](docs/images/user-guide-planning-timeframe.png)
+
 ### Exporting Data
 
 Click the Export button to download the current view as JSON or CSV. This is useful for sharing data with your team or feeding it into other tools.
 
 ![Export options](docs/images/user-guide-export.png)
 
+### Comparing Two Regions
+
+The **Region Compare** page (in the side navigation) diffs the catalog between any two regions. Pick Region A and Region B to get summary counts — only in A, only in B, in both, in neither — and a per-item table across three tabs: Products, API operations, and CloudFormation resources. By default the table shows only the differences; use the **Show items available in both / neither** toggle to see everything, and the name filter to find specific capabilities. This is useful for parity checks, such as verifying what a newer region is still missing relative to your baseline region. The selection is kept in the URL, so a comparison can be bookmarked or shared.
+
+![Region compare](docs/images/user-guide-region-compare.png)
+
 ### Navigation and Settings
 
-Open the side navigation to switch between the Capability by Region dashboard, the Policy Enforcer page (when deployed), and Settings. The Settings page lets you trigger a manual data refresh and, when the optional stacks are deployed, run usage analysis on demand and bulk-refresh every Policy Enforcer policy against the latest catalog.
+Open the side navigation to switch between the Capability by Region dashboard, the Region Compare page, the Policy Enforcer page (when deployed), and Settings. The Settings page lets you trigger a manual data refresh and, when the optional stacks are deployed, run usage analysis on demand and bulk-refresh every Policy Enforcer policy against the latest catalog.
 
 ![Navigation](docs/images/user-guide-navigation.png)
 
