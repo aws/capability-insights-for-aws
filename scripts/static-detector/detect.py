@@ -809,47 +809,184 @@ def _cdk_value(raw):
     return v
 
 
-def extract_cdk_l2_properties(text, rel_path):
-    """Extract config props from CDK L2 constructor calls. Returns
-    (cfn_type, rel_path, {attr: value}) per catalog construct instantiation.
-    Brace-depth tracks the props object; only DIRECT props (depth 1 inside the
-    constructor) bind, so nested option objects don't leak same-named keys."""
-    results = []
-    cur = None      # {"cfn": ..., "wanted": {...}, "props": {...}, "depth": int}
-    for line in text.splitlines():
-        if cur is None:
-            m = _CDK_L2_NEW_RE.search(line)
-            if m:
-                cls = m.group(1)
-                # L1 `CfnFunction` shares its config catalog with L2 `Function`.
-                lookup = cls[3:] if cls.startswith("Cfn") else cls
-                info = _CDK_L2_CONSTRUCT_CATALOG.get(lookup)
-                if info:
-                    cfn, wanted = info
-                    # Depth from this line onward (the `(` and any `{` on it).
-                    depth = line.count("{") - line.count("}")
-                    cur = {"cfn": cfn, "wanted": wanted, "props": {},
-                           "depth": depth}
+def _match_balanced(text, open_pos, open_ch, close_ch):
+    """Given `text` and the index of an opening bracket at open_pos, return the
+    index of its matching close bracket, or -1. Skips brackets inside single/
+    double/backtick string literals so `'a{b'` doesn't throw off the count."""
+    depth = 0
+    i = open_pos
+    n = len(text)
+    quote = None
+    while i < n:
+        c = text[i]
+        if quote:
+            if c == "\\":
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+        elif c in "'\"`":
+            quote = c
+        elif c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def _split_top_level_object(obj_text):
+    """Yield (key, value_text) for each TOP-LEVEL `key: value` pair in a JS/TS
+    object literal body (the text BETWEEN the outer braces). Nested objects,
+    arrays, and function-call parens are skipped over so a nested `runtime:` in
+    an inner options object never leaks. Strings are respected."""
+    n = len(obj_text)
+    i = 0
+    while i < n:
+        # Skip whitespace/commas between entries.
+        while i < n and obj_text[i] in " \t\r\n,":
+            i += 1
+        if i >= n:
+            break
+        # A key is an identifier (optionally quoted) up to the next ':'.
+        m = re.match(r'["\']?([A-Za-z_$][A-Za-z0-9_$]*)["\']?\s*:', obj_text[i:])
+        if not m:
+            # Not a key here (could be a spread, comment, etc.) — advance to the
+            # next top-level comma or nested-structure end to stay in sync.
+            i = _skip_to_next_top_level_comma(obj_text, i)
             continue
-        # Inside a construct call. Bind direct props (depth exactly 1 = inside
-        # the single props object). Check before updating depth for this line.
-        if cur["depth"] == 1:
-            pm = _CDK_L2_PROP_RE.match(line)
-            if pm:
-                key = pm.group(1)
-                if key in cur["wanted"] and cur["wanted"][key] not in cur["props"]:
-                    val = _cdk_value(pm.group(2))
-                    if val:
-                        cur["props"][cur["wanted"][key]] = val
-        cur["depth"] += line.count("{") - line.count("}")
-        # A closing paren at base depth ends the constructor call.
-        if cur["depth"] <= 0 or (cur["depth"] == 0):
-            if cur["props"]:
-                results.append((cur["cfn"], rel_path, cur["props"]))
-            cur = None
-    if cur and cur["props"]:
-        results.append((cur["cfn"], rel_path, cur["props"]))
+        key = m.group(1)
+        i += m.end()
+        # The value runs until the next top-level comma, skipping nested
+        # (), [], {} and strings.
+        start = i
+        depth = 0
+        quote = None
+        while i < n:
+            c = obj_text[i]
+            if quote:
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == quote:
+                    quote = None
+            elif c in "'\"`":
+                quote = c
+            elif c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+            elif c == "," and depth == 0:
+                break
+            i += 1
+        yield key, obj_text[start:i].strip()
+        i += 1  # skip the comma
+
+
+def _skip_to_next_top_level_comma(s, i):
+    n = len(s)
+    depth = 0
+    quote = None
+    while i < n:
+        c = s[i]
+        if quote:
+            if c == "\\":
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+        elif c in "'\"`":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            return i + 1
+        i += 1
+    return n
+
+
+def extract_cdk_l2_properties(text, rel_path):
+    """Extract config props from CDK construct calls (L1 `CfnFunction` and L2
+    `Function`). Returns (cfn_type, rel_path, {attr: value}) per catalog
+    construct instantiation.
+
+    Layout-independent: it finds each `new <ns>.<Construct>(`, captures the
+    whole paren-balanced call (which may span many lines or sit on one), locates
+    the TOP-LEVEL props object literal within the call args, and reads only its
+    direct keys. Works whether the object is on the same line as `new`, on its
+    own lines, or inline anywhere in the arg list, and nested option objects
+    don't leak same-named keys."""
+    results = []
+    for m in _CDK_L2_NEW_RE.finditer(text):
+        cls = m.group(1)
+        lookup = cls[3:] if cls.startswith("Cfn") else cls   # CfnFunction->Function
+        info = _CDK_L2_CONSTRUCT_CATALOG.get(lookup)
+        if not info:
+            continue
+        cfn, wanted = info
+        # The '(' is the last char the regex matched.
+        open_paren = m.end() - 1
+        close_paren = _match_balanced(text, open_paren, "(", ")")
+        if close_paren == -1:
+            continue
+        call_args = text[open_paren + 1:close_paren]
+        # Find the props object: the LAST top-level `{...}` in the arg list
+        # (CDK props are the final constructor argument).
+        obj_body = _last_top_level_object(call_args)
+        if obj_body is None:
+            continue
+        props = {}
+        for key, val_text in _split_top_level_object(obj_body):
+            if key in wanted and wanted[key] not in props:
+                val = _cdk_value(val_text)
+                if val:
+                    props[wanted[key]] = val
+        if props:
+            results.append((cfn, rel_path, props))
     return results
+
+
+def _last_top_level_object(args_text):
+    """Return the body (between braces) of the LAST top-level `{...}` in a
+    constructor's argument text, or None. CDK's props object is the final arg."""
+    last = None
+    i = 0
+    n = len(args_text)
+    quote = None
+    while i < n:
+        c = args_text[i]
+        if quote:
+            if c == "\\":
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in "'\"`":
+            quote = c
+            i += 1
+            continue
+        if c == "{":
+            close = _match_balanced(args_text, i, "{", "}")
+            if close == -1:
+                break
+            last = args_text[i + 1:close]
+            i = close + 1
+            continue
+        if c in "([":
+            close_ch = ")" if c == "(" else "]"
+            close = _match_balanced(args_text, i, c, close_ch)
+            if close == -1:
+                break
+            i = close + 1
+            continue
+        i += 1
+    return last
 
 
 def _tf_service_display(seg):
