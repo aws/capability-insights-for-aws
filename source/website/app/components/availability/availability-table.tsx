@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCollection } from '@cloudscape-design/collection-hooks';
 import Table from '@cloudscape-design/components/table';
 import PropertyFilter from '@cloudscape-design/components/property-filter';
@@ -20,6 +20,7 @@ import {
   TablePreferences,
 } from './availability-table-properties';
 import { deriveTimeframeOptions } from '~/utils/planning-timeframe';
+import { generateCsv, generateJson, downloadBlob } from '~/utils/export-utils';
 
 interface AvailabilityTableProps<T extends RegionalAvailability> {
   title: string;
@@ -92,6 +93,45 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
   const actionsRef = useRef(actions);
   actionsRef.current = actions;
   const prevQueryRef = useRef(query);
+
+  // Export all filtered items including ancestor rows to mirror the UI tree
+  const filteredItems = useMemo(() => {
+    if (!hasActiveFilter) return regionalAvailability;
+    const byId = new Map(regionalAvailability.map(i => [i.id, i]));
+    const matched = regionalAvailability.filter(item => filteringFunction(item, query));
+    const matchedIds = new Set(matched.map(item => item.id));
+    for (const item of matched) {
+      let parentId = item.parentId;
+      while (parentId && !matchedIds.has(parentId)) {
+        matchedIds.add(parentId);
+        const parent = byId.get(parentId);
+        parentId = parent?.parentId ?? null;
+      }
+    }
+    return regionalAvailability.filter(item => matchedIds.has(item.id));
+  }, [hasActiveFilter, regionalAvailability, filteringFunction, query]);
+
+  const handleExport = useCallback(
+    (format: 'json' | 'csv') => {
+      if (!hasActiveFilter) {
+        const url = format === 'json' ? downloadUrls.json : downloadUrls.csv;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '';
+        a.click();
+        return;
+      }
+      const safeTitle = title.toLowerCase().replace(/\s+/g, '-');
+      if (format === 'csv') {
+        const csv = generateCsv(filteredItems, regions);
+        downloadBlob(csv, `${safeTitle}-filtered.csv`, 'text/csv;charset=utf-8');
+      } else {
+        const json = generateJson(filteredItems, regions);
+        downloadBlob(json, `${safeTitle}-filtered.json`, 'application/json');
+      }
+    },
+    [hasActiveFilter, downloadUrls, filteredItems, regions, title],
+  );
 
   useEffect(() => {
     if (query === prevQueryRef.current) return;
@@ -176,13 +216,7 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
                   { id: 'json', text: 'Download as JSON' },
                   { id: 'csv', text: 'Download as CSV' },
                 ]}
-                onItemClick={({ detail }) => {
-                  const url = detail.id === 'json' ? downloadUrls.json : downloadUrls.csv;
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = '';
-                  a.click();
-                }}
+                onItemClick={({ detail }) => handleExport(detail.id as 'json' | 'csv')}
                 ariaLabel={`Export ${title}`}
               >
                 Export
