@@ -358,26 +358,30 @@ def _indent_of(line):
     return len(line) - len(line.lstrip(" "))
 
 
+def _strip_inline_comment(v):
+    """Strip a trailing line comment that rode along from the source (YAML `#`,
+    HCL `#`/`//`). Only when OUTSIDE quotes — a `#` inside a quoted string is
+    part of the value. Cheap heuristic: if the value starts with a quote, cut
+    at the closing quote; otherwise cut at the first ` #` / ` //`."""
+    if v[:1] in ('"', "'"):
+        q = v[0]
+        end = v.find(q, 1)
+        if end != -1:
+            return v[:end + 1]
+        return v
+    for marker in (" #", "\t#", " //", "\t//"):
+        idx = v.find(marker)
+        if idx != -1:
+            v = v[:idx].rstrip()
+    return v
+
+
 def _clean_value(raw):
     """Normalize a CFN/TF scalar value: strip quotes/commas; flag unresolved
     (intrinsic/ref/variable/expression) values rather than guessing. A value
     only survives as a literal if it starts like a literal AND has no embedded
     interpolation or ternary. Returns a string."""
-    v = raw.strip().rstrip(",")
-    # Strip a trailing line comment that rode along from the source (YAML `#`,
-    # HCL `#`/`//`). Only when OUTSIDE quotes — a `#` inside a quoted string is
-    # part of the value. Cheap heuristic: if the value starts with a quote, cut
-    # at the closing quote; otherwise cut at the first ` #` / ` //`.
-    if v[:1] in ('"', "'"):
-        q = v[0]
-        end = v.find(q, 1)
-        if end != -1:
-            v = v[:end + 1]
-    else:
-        for marker in (" #", "\t#", " //", "\t//"):
-            idx = v.find(marker)
-            if idx != -1:
-                v = v[:idx].rstrip()
+    v = _strip_inline_comment(raw.strip().rstrip(","))
     if not v or _UNRESOLVED_RE.match(v) or _HAS_EXPR_RE.search(v):
         return "<unresolved>"
     v = v.strip('"\'')
@@ -420,7 +424,7 @@ def resolve_value(raw, symbols):
     tfvars/constants) report ALL observed values — if the repo declares both
     m5.large and m5.xlarge, both are reported. Never guesses a value the repo
     does not contain."""
-    v = (raw or "").strip().rstrip(",")
+    v = _strip_inline_comment((raw or "").strip().rstrip(","))
     # Bare reference we might resolve against the symbol table.
     bare = v.strip('"\'')
     name = None
