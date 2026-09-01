@@ -27,6 +27,8 @@ Deploy options:
   --enable-policy-enforcer         Also deploy the opt-in Policy Enforcer stack
   --enable-chat                    Also deploy the opt-in Chat assistant stack (Bedrock)
   --bedrock-model-id <id>          Bedrock model/inference-profile id for chat (only with --enable-chat)
+  --deployer-role-name <name>      IAM role name this deploy runs as (only with --enable-usage-analysis;
+                                   derived from your caller identity if omitted)
 
 Global options:
   -y, --yes                        Skip confirmation prompts
@@ -66,7 +68,7 @@ cmd_setup() {
 }
 
 cmd_deploy() {
-  local source_access_point_arn="" source_folders="" enable_usage_analysis="" cloudtrail_bucket="" enable_policy_enforcer="" enable_chat="" bedrock_model_id=""
+  local source_access_point_arn="" source_folders="" enable_usage_analysis="" cloudtrail_bucket="" enable_policy_enforcer="" enable_chat="" bedrock_model_id="" deployer_role_name=""
   while [[ $# -gt 0 ]]; do
     case $1 in
       --source-access-point-arn) source_access_point_arn="$2"; shift 2 ;;
@@ -76,6 +78,7 @@ cmd_deploy() {
       --enable-policy-enforcer) enable_policy_enforcer="true"; shift ;;
       --enable-chat) enable_chat="true"; shift ;;
       --bedrock-model-id) bedrock_model_id="$2"; shift 2 ;;
+      --deployer-role-name) deployer_role_name="$2"; shift 2 ;;
       -y|--yes) shift ;;
       *) echo "Unknown option: $1"; usage ;;
     esac
@@ -112,6 +115,9 @@ cmd_deploy() {
     usage_analysis_args+=(--enable-usage-analysis)
     if [[ -n "$cloudtrail_bucket" ]]; then
       usage_analysis_args+=(--cloudtrail-bucket "$cloudtrail_bucket")
+    fi
+    if [[ -n "$deployer_role_name" ]]; then
+      usage_analysis_args+=(--deployer-role-name "$deployer_role_name")
     fi
   fi
 

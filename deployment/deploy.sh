@@ -29,6 +29,11 @@ Deploy options (pass as flags or omit to be prompted):
                                          the deploy region; unavailable in GovCloud/sovereign/ADC.
   --bedrock-model-id <id>                Bedrock model or cross-region inference profile id for
                                          chat (default: us.anthropic.claude-haiku-4-5-20251001-v1:0)
+  --deployer-role-name <name>            IAM role name this deployment runs as. Registered as a
+                                         Lake Formation Data Lake Admin by the Usage Analysis stack
+                                         so its LF grants succeed. If omitted, it is derived from
+                                         your current caller identity (falling back to "Admin").
+                                         Only relevant with --enable-usage-analysis.
   -y, --yes                              Skip confirmation prompts
 
 Examples:
@@ -144,7 +149,7 @@ deploy_stack_checked() {
 }
 
 cmd_deploy() {
-  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders="" cloudtrail_bucket="" enable_usage_analysis="" enable_policy_enforcer="" enable_chat="" bedrock_model_id="" auto_approve=""
+  local private_vpc_id="" backend_subnet_id="" api_access_subnet_id="" deployment_assets_bucket_name="" source_access_point_arn="" source_folders="" cloudtrail_bucket="" enable_usage_analysis="" enable_policy_enforcer="" enable_chat="" bedrock_model_id="" deployer_role_name="" auto_approve=""
 
   while [[ $# -gt 0 ]]; do
     case $1 in
@@ -159,6 +164,7 @@ cmd_deploy() {
       --enable-policy-enforcer)          enable_policy_enforcer="true"; shift ;;
       --enable-chat)                     enable_chat="true"; shift ;;
       --bedrock-model-id)                bedrock_model_id="$2"; shift 2 ;;
+      --deployer-role-name)              deployer_role_name="$2"; shift 2 ;;
       -y|--yes)                          auto_approve="true"; shift ;;
       *) echo "Unknown option: $1"; usage ;;
     esac
@@ -270,6 +276,33 @@ cmd_deploy() {
 
   echo "── Deploying Usage Analysis stack ──"
   if [[ "$enable_usage_analysis" == "true" ]]; then
+    # The Usage Analysis stack registers DeployerRoleName as a Lake Formation
+    # Data Lake Admin so CloudFormation (running as the deploying principal) can
+    # create the LF Permissions grants. That role name MUST match the role this
+    # deploy actually runs as — otherwise the grants fail with AccessDenied.
+    # Resolve it: explicit --deployer-role-name > role parsed from the current
+    # caller identity > "Admin" fallback. (Only this stack needs it; the base,
+    # Policy Enforcer, and Chat stacks have no deployer-principal coupling.)
+    if [[ -z "$deployer_role_name" ]]; then
+      local caller_arn
+      caller_arn=$(aws sts get-caller-identity --query Arn --output text 2>/dev/null || echo "")
+      # arn:aws:sts::<acct>:assumed-role/<RoleName>/<session> -> <RoleName>
+      if [[ "$caller_arn" == *":assumed-role/"* ]]; then
+        deployer_role_name="${caller_arn#*:assumed-role/}"
+        deployer_role_name="${deployer_role_name%%/*}"
+      fi
+      if [[ -z "$deployer_role_name" ]]; then
+        deployer_role_name="Admin"
+        echo "  ⚠ Could not derive the deploy role from your caller identity; using DeployerRoleName=Admin."
+        echo "    If deploying with a non-admin role (or a role that uses an IAM path), pass"
+        echo "    --deployer-role-name <RoleName> so Lake Formation grants succeed."
+      else
+        echo "  Registering deploy role '$deployer_role_name' as Lake Formation Data Lake Admin."
+      fi
+    else
+      echo "  Registering deploy role '$deployer_role_name' as Lake Formation Data Lake Admin."
+    fi
+
     deploy_stack_checked CapabilityInsightsUsageAnalysis \
       --template-file "$SCRIPT_DIR/dist/template/usage-analysis.template.json" \
       --parameter-overrides \
@@ -278,6 +311,7 @@ cmd_deploy() {
         DeploymentAssetsBucketName="$deployment_assets_bucket_name" \
         LambdaCodeZipPath="$lambda_key" \
         CloudTrailBucketName="${cloudtrail_bucket:-}" \
+        DeployerRoleName="$deployer_role_name" \
       --capabilities CAPABILITY_NAMED_IAM \
       --no-cli-pager
     echo "  ✓ Usage Analysis stack deployed."
