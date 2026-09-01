@@ -1,0 +1,100 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudFormationUsageAnalysisStack",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateStack",
+        "cloudformation:UpdateStack",
+        "cloudformation:DeleteStack",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:GetTemplate",
+        "cloudformation:CreateChangeSet",
+        "cloudformation:ExecuteChangeSet",
+        "cloudformation:DescribeChangeSet",
+        "cloudformation:DeleteChangeSet"
+      ],
+      "Resource": "arn:aws:cloudformation:<REGION>:<ACCOUNT_ID>:stack/CapabilityInsightsUsageAnalysis/*"
+    },
+    {
+      "Sid": "IamPassRoleStatesAndEvents",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/CapabilityInsights*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": ["states.amazonaws.com", "events.amazonaws.com"]
+        }
+      }
+    },
+    {
+      "Sid": "StepFunctions",
+      "Effect": "Allow",
+      "Action": [
+        "states:CreateStateMachine",
+        "states:DeleteStateMachine",
+        "states:DescribeStateMachine",
+        "states:UpdateStateMachine",
+        "states:TagResource",
+        "states:UntagResource",
+        "states:ListTagsForResource",
+        "states:StartExecution"
+      ],
+      "Resource": "arn:aws:states:<REGION>:<ACCOUNT_ID>:stateMachine:CapabilityInsights*"
+    },
+    {
+      "Sid": "Glue",
+      "Effect": "Allow",
+      "Action": [
+        "glue:CreateDatabase",
+        "glue:DeleteDatabase",
+        "glue:UpdateDatabase",
+        "glue:GetDatabase",
+        "glue:GetDatabases",
+        "glue:CreateTable",
+        "glue:DeleteTable",
+        "glue:UpdateTable",
+        "glue:GetTable",
+        "glue:GetTables"
+      ],
+      "Resource": [
+        "arn:aws:glue:<REGION>:<ACCOUNT_ID>:catalog",
+        "arn:aws:glue:<REGION>:<ACCOUNT_ID>:database/cloudtrail_analysis",
+        "arn:aws:glue:<REGION>:<ACCOUNT_ID>:table/cloudtrail_analysis/*",
+        "arn:aws:glue:<REGION>:<ACCOUNT_ID>:userDefinedFunction/cloudtrail_analysis/*"
+      ]
+    },
+    {
+      "Sid": "LakeFormation",
+      "Effect": "Allow",
+      "Action": [
+        "lakeformation:GetDataLakeSettings",
+        "lakeformation:GrantPermissions",
+        "lakeformation:RevokePermissions",
+        "lakeformation:ListPermissions"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AthenaRuntimeValidation",
+      "Effect": "Allow",
+      "Action": [
+        "athena:StartQueryExecution",
+        "athena:GetQueryExecution",
+        "athena:GetQueryResults",
+        "athena:StopQueryExecution",
+        "athena:GetWorkGroup"
+      ],
+      "Resource": "arn:aws:athena:<REGION>:<ACCOUNT_ID>:workgroup/primary"
+    },
+    {
+      "Sid": "CloudTrailBucketDiscovery",
+      "Effect": "Allow",
+      "Action": "cloudtrail:DescribeTrails",
+      "Resource": "*"
+    }
+  ]
+}

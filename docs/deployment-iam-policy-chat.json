@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudFormationChatStack",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateStack",
+        "cloudformation:UpdateStack",
+        "cloudformation:DeleteStack",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:GetTemplate",
+        "cloudformation:CreateChangeSet",
+        "cloudformation:ExecuteChangeSet",
+        "cloudformation:DescribeChangeSet",
+        "cloudformation:DeleteChangeSet"
+      ],
+      "Resource": "arn:aws:cloudformation:<REGION>:<ACCOUNT_ID>:stack/CapabilityInsightsChat/*"
+    },
+    {
+      "Sid": "BedrockChatPreflight",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": ["arn:aws:bedrock:*::foundation-model/*", "arn:aws:bedrock:<REGION>:<ACCOUNT_ID>:inference-profile/*"]
+    }
+  ]
+}

@@ -131,19 +131,34 @@ npm run deploy -- \
   --enable-usage-analysis
 ```
 
-| Flag                              | Description                                                                                                                                                            |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--private-vpc-id`                | VPC ID. Must have DNS resolution and DNS hostnames enabled.                                                                                                            |
-| `--backend-subnet-id`             | Subnet without an internet gateway, used for Lambda compute. Must have a route to S3 via a Gateway VPC Endpoint, and to DynamoDB if `--enable-policy-enforcer` is set. |
-| `--api-access-subnet-id`          | Subnet with an internet gateway, used for user access and the API Gateway VPC Endpoint.                                                                                |
-| `--deployment-assets-bucket-name` | S3 bucket where deployment assets (Lambda code zip) are stored.                                                                                                        |
-| `--source-access-point-arn`       | S3 access point ARN for the capability data source (provided during onboarding).                                                                                       |
-| `--source-folders`                | Comma-separated list of data sources to pull from (default: `public`). Include additional partitions if granted access.                                                |
-| `--enable-usage-analysis`         | Deploy the opt-in Usage Analysis stack to enable personalization.                                                                                                      |
-| `--cloudtrail-bucket`             | CloudTrail logs bucket used by the analyzer (only with `--enable-usage-analysis`). Auto-discovered if omitted.                                                         |
-| `--enable-policy-enforcer`        | Deploy the opt-in Policy Enforcer stack to enable regional governance policy generation.                                                                               |
-| `--enable-chat`                   | Deploy the opt-in Chat assistant stack. Requires Amazon Bedrock with Claude model access enabled in the deployment region.                                             |
-| `--bedrock-model-id`              | Bedrock model or cross-region inference profile id for chat (only with `--enable-chat`). Defaults to `us.anthropic.claude-haiku-4-5-20251001-v1:0`.                    |
+| Flag                              | Description                                                                                                                                                                                                                                                    |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--private-vpc-id`                | VPC ID. Must have DNS resolution and DNS hostnames enabled.                                                                                                                                                                                                    |
+| `--backend-subnet-id`             | Subnet without an internet gateway, used for Lambda compute. Must have a route to S3 via a Gateway VPC Endpoint, and to DynamoDB if `--enable-policy-enforcer` is set.                                                                                         |
+| `--api-access-subnet-id`          | Subnet with an internet gateway, used for user access and the API Gateway VPC Endpoint.                                                                                                                                                                        |
+| `--deployment-assets-bucket-name` | S3 bucket where deployment assets (Lambda code zip) are stored.                                                                                                                                                                                                |
+| `--source-access-point-arn`       | S3 access point ARN for the capability data source (provided during onboarding).                                                                                                                                                                               |
+| `--source-folders`                | Comma-separated list of data sources to pull from (default: `public`). Include additional partitions if granted access.                                                                                                                                        |
+| `--enable-usage-analysis`         | Deploy the opt-in Usage Analysis stack to enable personalization.                                                                                                                                                                                              |
+| `--cloudtrail-bucket`             | CloudTrail logs bucket used by the analyzer (only with `--enable-usage-analysis`). Auto-discovered if omitted.                                                                                                                                                 |
+| `--enable-policy-enforcer`        | Deploy the opt-in Policy Enforcer stack to enable regional governance policy generation.                                                                                                                                                                       |
+| `--enable-chat`                   | Deploy the opt-in Chat assistant stack. Requires Amazon Bedrock with Claude model access enabled in the deployment region.                                                                                                                                     |
+| `--bedrock-model-id`              | Bedrock model or cross-region inference profile id for chat (only with `--enable-chat`). Defaults to `us.anthropic.claude-haiku-4-5-20251001-v1:0`.                                                                                                            |
+| `--deployer-role-name`            | IAM role name this deployment runs as. Registered as a Lake Formation Data Lake Admin by the Usage Analysis stack so its grants succeed (only relevant with `--enable-usage-analysis`). Derived from your caller identity if omitted, falling back to `Admin`. |
+
+#### Deploying without Admin access
+
+By default the deploy runs with whatever credentials you have, which are often Admin. To deploy under a **least-privilege role** instead, use the example IAM policies in [`docs/`](docs/deployment-iam-policy.md). They are split so you attach only what you enable:
+
+| File                                              | Attach when                       |
+| ------------------------------------------------- | --------------------------------- |
+| `docs/deployment-iam-policy-base.json`            | Always (required)                 |
+| `docs/deployment-iam-policy-usage-analysis.json`  | with `--enable-usage-analysis`    |
+| `docs/deployment-iam-policy-policy-enforcer.json` | with `--enable-policy-enforcer`   |
+| `docs/deployment-iam-policy-chat.json`            | with `--enable-chat`              |
+| `docs/deployment-role-trust-policy.json`          | example trust policy for the role |
+
+Create a role, attach the base policy plus the add-on(s) for the stacks you enable, then deploy while assuming that role and pass `--deployer-role-name <RoleName>`. That name is registered as a Lake Formation Data Lake Admin by the Usage Analysis stack, so its permission grants succeed under a non-admin principal. Full steps are in [docs/deployment-iam-policy.md](docs/deployment-iam-policy.md).
 
 #### Teardown
 
