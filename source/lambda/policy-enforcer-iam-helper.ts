@@ -13,8 +13,8 @@ const MAX_POLICY_VERSIONS = 5;
 const client = new IAMClient({});
 const stsClient = new STSClient({});
 
-/** Cached at module load via STS GetCallerIdentity on first use. */
-let cachedAccountId: string | undefined;
+/** Account id and partition, resolved via STS GetCallerIdentity on first use and cached. */
+let cachedIdentity: { accountId: string; partition: string } | undefined;
 
 /**
  * IAM Policy Helper Lambda — runs OUTSIDE the VPC because IAM is a global
@@ -153,22 +153,26 @@ function isAlreadyExistsError(e: unknown): boolean {
  * ARNs follow a deterministic shape:
  *   arn:<partition>:iam::<account>:policy/<name>
  *
- * Account is resolved via STS GetCallerIdentity on first call and cached
- * thereafter. We avoid relying on `AWS_LAMBDA_FUNCTION_ARN` because the
+ * Account and partition are resolved via STS GetCallerIdentity on first call
+ * and cached thereafter. We avoid relying on `AWS_LAMBDA_FUNCTION_ARN` because the
  * Lambda runtime does not set that env var by default — only fields like
  * `AWS_LAMBDA_FUNCTION_NAME` and `AWS_REGION` are exposed.
  */
 async function deriveExistingArn(policyName: string): Promise<string> {
-  const accountId = await getAccountId();
-  return `arn:aws:iam::${accountId}:policy/${policyName}`;
+  const { partition, accountId } = await getCallerIdentity();
+  return `arn:${partition}:iam::${accountId}:policy/${policyName}`;
 }
 
-async function getAccountId(): Promise<string> {
-  if (cachedAccountId) return cachedAccountId;
+async function getCallerIdentity(): Promise<{ accountId: string; partition: string }> {
+  if (cachedIdentity) return cachedIdentity;
   const result = await stsClient.send(new GetCallerIdentityCommand({}));
   if (!result.Account) throw new Error('STS GetCallerIdentity returned no Account');
-  cachedAccountId = result.Account;
-  return cachedAccountId;
+  // Arn has the form arn:<partition>:sts::<account>:...; segment 1 is the
+  // partition, so ARNs are built correctly in aws, aws-cn and aws-us-gov.
+  const partition = result.Arn?.split(':')[1];
+  if (!partition) throw new Error('STS GetCallerIdentity returned no usable Arn');
+  cachedIdentity = { accountId: result.Account, partition };
+  return cachedIdentity;
 }
 
 async function trimPolicyVersions(arn: string): Promise<void> {

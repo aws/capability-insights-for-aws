@@ -47,6 +47,7 @@ export interface CapabilityInsightsStackProps extends cdk.StackProps {
 export enum CapabilityInsightsStackOutputs {
   WebsiteBucketName = 'WebsiteBucketName',
   WebsiteBucketArn = 'WebsiteBucketArn',
+  WebsiteUrl = 'WebsiteUrl',
 }
 
 /**
@@ -880,7 +881,7 @@ def lambda_handler(event, context):
     writeConfigCustomResource.addPropertyOverride('Bucket', cdk.Fn.ref(websiteBucket.logicalId));
     writeConfigCustomResource.addPropertyOverride(
       'ApiUrl',
-      cdk.Fn.sub('https://${ApiId}.execute-api.${AWS::Region}.amazonaws.com/prod', {
+      cdk.Fn.sub('https://${ApiId}.execute-api.${AWS::Region}.${AWS::URLSuffix}/prod', {
         ApiId: apigw.attrRestApiId,
       }),
     );
@@ -891,6 +892,12 @@ def lambda_handler(event, context):
     });
     new cdk.CfnOutput(this, CapabilityInsightsStackOutputs.WebsiteBucketArn, {
       value: cdk.Fn.getAtt(websiteBucket.logicalId, 'Arn').toString(),
+    });
+    // WebsiteURL is resolved by CloudFormation from the bucket's website
+    // configuration, so it is correct in every partition and region.
+    new cdk.CfnOutput(this, CapabilityInsightsStackOutputs.WebsiteUrl, {
+      description: 'S3 website endpoint for the dashboard (reachable from within the VPC)',
+      value: cdk.Fn.getAtt(websiteBucket.logicalId, 'WebsiteURL').toString(),
     });
   }
 }
