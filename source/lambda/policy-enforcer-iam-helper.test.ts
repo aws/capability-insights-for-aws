@@ -18,7 +18,11 @@ beforeEach(() => {
   iamMock.reset();
   stsMock.reset();
   // Default identity for the adopt-on-existing path; tests override as needed.
-  stsMock.on(GetCallerIdentityCommand).resolves({ Account: '123456789012' });
+  // Arn is included because the helper reads the partition from it.
+  stsMock.on(GetCallerIdentityCommand).resolves({
+    Account: '123456789012',
+    Arn: 'arn:aws:sts::123456789012:assumed-role/Deploy/session',
+  });
 });
 
 describe('create', () => {

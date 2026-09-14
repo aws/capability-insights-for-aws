@@ -157,7 +157,7 @@ cmd_teardown() {
   echo "── Emptying assets bucket ──"
   local account_id region assets_bucket
   account_id=$(aws sts get-caller-identity --query Account --output text)
-  region=$(aws configure get region || echo "us-east-1")
+  region="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || echo "us-east-1")}}"
   assets_bucket="capability-insights-assets-${account_id}-${region}"
   aws s3 rm "s3://$assets_bucket" --recursive || true
 

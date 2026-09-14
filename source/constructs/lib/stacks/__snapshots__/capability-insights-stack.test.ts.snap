@@ -78,6 +78,15 @@ exports[`CloudFormation template matches snapshot 1`] = `
         "Ref": "capabilityinsightswebsite",
       },
     },
+    "WebsiteUrl": {
+      "Description": "S3 website endpoint for the dashboard (reachable from within the VPC)",
+      "Value": {
+        "Fn::GetAtt": [
+          "capabilityinsightswebsite",
+          "WebsiteURL",
+        ],
+      },
+    },
   },
   "Parameters": {
     "AnalysisStateMachineArn": {
@@ -1121,7 +1130,7 @@ def lambda_handler(event, context):
       "Properties": {
         "ApiUrl": {
           "Fn::Sub": [
-            "https://\${ApiId}.execute-api.\${AWS::Region}.amazonaws.com/prod",
+            "https://\${ApiId}.execute-api.\${AWS::Region}.\${AWS::URLSuffix}/prod",
             {
               "ApiId": {
                 "Fn::GetAtt": [

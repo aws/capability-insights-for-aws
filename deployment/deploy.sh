@@ -57,7 +57,12 @@ EOF
 
 get_account_and_region() {
   ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-  REGION=$(aws configure get region || echo "us-east-1")
+  # Read the partition from the caller ARN (arn:<partition>:...) so ARNs are
+  # built correctly outside the commercial partition (aws-cn, aws-us-gov).
+  PARTITION=$(aws sts get-caller-identity --query Arn --output text | cut -d: -f2)
+  # Prefer AWS_REGION / AWS_DEFAULT_REGION (honored by the CLI but not read by
+  # `aws configure get region`), then the configured region, then a default.
+  REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || echo "us-east-1")}}"
 }
 
 prompt_if_empty() {
@@ -271,7 +276,7 @@ cmd_deploy() {
   echo "── Uploading website assets ──"
   get_account_and_region
   local website_bucket="capability-insights-website-${ACCOUNT_ID}-${REGION}"
-  local website_bucket_arn="arn:aws:s3:::${website_bucket}"
+  local website_bucket_arn="arn:${PARTITION}:s3:::${website_bucket}"
   aws s3 sync "$SCRIPT_DIR/dist/website/" "s3://$website_bucket/"
 
   echo "── Deploying Usage Analysis stack ──"
@@ -543,7 +548,12 @@ JSON
   echo "✓ Deployment complete"
   echo ""
   echo "Website URL (accessible from within your VPC):"
-  echo "  http://${website_bucket}.s3-website-${REGION}.amazonaws.com"
+  # Read the endpoint from the stack's WebsiteUrl output so it is correct in
+  # every partition/region rather than hardcoding the commercial DNS suffix.
+  local website_url
+  website_url=$(aws cloudformation describe-stacks --stack-name CapabilityInsightsForAWS \
+    --query "Stacks[0].Outputs[?OutputKey=='WebsiteUrl'].OutputValue" --output text 2>/dev/null || true)
+  echo "  ${website_url:-(see the WebsiteUrl output of the CapabilityInsightsForAWS stack)}"
 }
 
 cmd_teardown() {
