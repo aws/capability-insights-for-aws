@@ -68,14 +68,16 @@ Capability Insights for AWS consists of a CloudFormation stack, Lambda function 
 
 Capability Insights for AWS deploys into your existing network infrastructure. You will need the following in the AWS account and region where you want the dashboard accessible:
 
-| Resource                            | Description                                                                         |
-| ----------------------------------- | ----------------------------------------------------------------------------------- |
-| VPC                                 | The VPC where you want the dashboard deployed. Must have DNS resolution enabled.    |
-| └ Subnet (with internet gateway)    | Users access the dashboard from this subnet.                                        |
-| └ Subnet (without internet gateway) | Lambda functions run here securely with no direct internet access.                  |
-| S3 access point ARN                 | How the solution reads capability data from the source. Provided during onboarding. |
+| Resource                            | Description                                                                                                                                                                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| VPC                                 | The VPC where you want the dashboard deployed. Must have DNS resolution enabled.                                                                                                                                         |
+| └ Subnet (with internet gateway)    | Users access the dashboard from this subnet.                                                                                                                                                                             |
+| └ Subnet (without internet gateway) | Lambda functions run here securely with no direct internet access.                                                                                                                                                       |
+| └ S3 Gateway VPC Endpoint           | **Required.** Gives the backend subnet a route to S3 and stamps `aws:SourceVpc` on requests to the website bucket. Without it the bucket policy denies every read (see [Accessing the Website](#accessing-the-website)). |
+| └ DynamoDB Gateway VPC Endpoint     | Optional — needed only when you enable the Policy Enforcer (`--enable-policy-enforcer`), so the backend subnet can reach the policy table.                                                                               |
+| S3 access point ARN                 | How the solution reads capability data from the source. Provided during onboarding.                                                                                                                                      |
 
-If you don't have an existing VPC and subnets to deploy into, we provide a [Sample Environment Stack](#sample-environment-stack-optional) that creates these resources for you.
+If you don't have an existing VPC and subnets to deploy into, we provide a [Sample Environment Stack](#sample-environment-stack-optional) that creates these resources (VPC, subnets, and both gateway endpoints) for you.
 
 The solution deploys to whichever region is configured in your AWS CLI profile. To check your current region, run `aws configure get region`. To change it, run `aws configure set region <REGION>`.
 
@@ -142,7 +144,7 @@ npm run deploy -- \
 | `--enable-usage-analysis`         | Deploy the opt-in Usage Analysis stack to enable personalization.                                                                                                                                                                                              |
 | `--cloudtrail-bucket`             | CloudTrail logs bucket used by the analyzer (only with `--enable-usage-analysis`). Auto-discovered if omitted.                                                                                                                                                 |
 | `--enable-policy-enforcer`        | Deploy the opt-in Policy Enforcer stack to enable regional governance policy generation.                                                                                                                                                                       |
-| `--enable-chat`                   | Deploy the opt-in Chat assistant stack. Requires Amazon Bedrock with Claude model access enabled in the deployment region.                                                                                                                                     |
+| `--enable-chat`                   | Deploy the opt-in Chat assistant stack. Requires the ability to invoke the chosen Claude model via Amazon Bedrock in the deployment region (verify with a test prompt first).                                                                                  |
 | `--bedrock-model-id`              | Bedrock model or cross-region inference profile id for chat (only with `--enable-chat`). Defaults to `us.anthropic.claude-haiku-4-5-20251001-v1:0`.                                                                                                            |
 | `--deployer-role-name`            | IAM role name this deployment runs as. Registered as a Lake Formation Data Lake Admin by the Usage Analysis stack so its grants succeed (only relevant with `--enable-usage-analysis`). Derived from your caller identity if omitted, falling back to `Admin`. |
 
@@ -264,16 +266,19 @@ the route table when bringing your own VPC.
 
 #### Optional: Chat assistant (conversational interface)
 
-> **Prerequisite — enable Bedrock model access first.** This is an account-level,
-> per-region setting the deployment **cannot** turn on for you: the stack grants
-> the Lambda permission to _call_ Bedrock, but your account must separately be
-> granted access to the Claude model in the deployment region (Bedrock console →
-> **Model access** → enable the Anthropic Claude model, accepting the use-case
-> agreement if prompted). If it isn't enabled, the Chat stack still deploys
-> cleanly but every chat request **fails at runtime** with an access-denied
-> error. The scripted deploy runs a preflight check and warns when access is
-> missing. Default model: `us.anthropic.claude-haiku-4-5-20251001-v1:0`
-> (override with `--bedrock-model-id`).
+> **Prerequisite — verify you can invoke the Bedrock chat model first.** Amazon
+> Bedrock foundation models are generally enabled by default in accounts now, but
+> access can still vary by account, Region, and partition, and Anthropic (Claude)
+> models may require accepting a one-time use-case agreement. Before launching the
+> Chat stack, confirm you can actually **invoke** the specified (or default) model
+> in the deployment Region — send a test prompt in the Bedrock console (Chat/Text
+> playground) or run an `aws bedrock-runtime converse` call against it. The stack
+> grants the Lambda permission to _call_ Bedrock but **cannot** grant model access
+> itself, so if the account can't invoke the model the Chat stack still deploys
+> cleanly while every chat request **fails at runtime** with an access-denied
+> error. The scripted deploy runs this check for you — a 1-token test invocation
+> against the model, with a non-blocking warning if it fails. Default model:
+> `us.anthropic.claude-haiku-4-5-20251001-v1:0` (override with `--bedrock-model-id`).
 
 The conversational assistant is an optional stack
 (`template/chat.template.json`, also in `build-assets.zip`) that runs a
@@ -308,6 +313,9 @@ Since the website is not publicly accessible, you need a way to reach it from wi
 - **Existing VPN or Direct Connect** — if your organization already has connectivity to the VPC, use it directly
 - **AWS Client VPN** — set up a [Client VPN endpoint](https://docs.aws.amazon.com/vpn/latest/clientvpn-admin/what-is.html) in the VPC
 - **EC2 instance with SOCKS proxy** — SSH into an instance in the VPC and proxy browser traffic through it (see [Accessing the Website from Your Machine](#accessing-the-website-from-your-machine) in the Development section for a step-by-step guide)
+- **Windows instance with Remote Desktop (RDP)** — launch a Windows EC2 instance in the internet-facing subnet, open inbound TCP 3389 to your IP on its security group, connect over RDP, and browse the dashboard from the instance's own browser. This is fully manual: no stack in this solution provisions a Windows/RDP host (the Sample Environment's helper instance is Linux with SSH only), so you create the instance and its security-group rule yourself.
+
+> **Every option above needs the VPC to have an S3 Gateway VPC Endpoint.** The website bucket policy allows a request only when it carries `aws:SourceVpc` matching the deployment VPC, and S3 stamps that key only on requests that reach the bucket through a VPC endpoint. Without an S3 gateway endpoint, no request — even one originating inside the VPC — carries the key, so the sole `Allow` never matches and every read is denied. The S3 website endpoint surfaces that denial as an **HTTP 404**, not an obvious permission error, which makes it easy to misdiagnose. The Sample Environment stack creates this endpoint for you; bring-your-own-VPC deployments must add one (see [Prerequisites](#prerequisites)).
 
 ## User Guide
 
