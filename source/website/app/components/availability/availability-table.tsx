@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useCollection } from '@cloudscape-design/collection-hooks';
 import Table from '@cloudscape-design/components/table';
 import PropertyFilter from '@cloudscape-design/components/property-filter';
 import type { PropertyFilterProps } from '@cloudscape-design/components/property-filter';
-import type { CollectionPreferencesProps } from '@cloudscape-design/components/collection-preferences';
 import Pagination from '@cloudscape-design/components/pagination';
 import Header from '@cloudscape-design/components/header';
 import SpaceBetween from '@cloudscape-design/components/space-between';
@@ -21,6 +20,7 @@ import {
 } from './availability-table-properties';
 import { deriveTimeframeOptions } from '~/utils/planning-timeframe';
 import { generateCsv, generateJson, downloadBlob } from '~/utils/export-utils';
+import { useStoredPreferences } from '~/hooks/use-stored-preferences';
 
 interface AvailabilityTableProps<T extends RegionalAvailability> {
   title: string;
@@ -45,9 +45,9 @@ export default function AvailabilityTable<T extends RegionalAvailability>({
   extraFilteringProperties,
   enableTimeframeFilter = false,
 }: AvailabilityTableProps<T>) {
-  const [preferences, setPreferences] = useState<CollectionPreferencesProps.Preferences>({
-    stickyColumns: { first: 1, last: 0 },
-  });
+  // Column preferences (which Region columns are shown, order, sticky, page
+  // size) persist per table in localStorage, so a user only sets them up once.
+  const { preferences, setPreferences } = useStoredPreferences(title);
 
   const columnDefinitions = createColumns({
     nameColumnHeader: nameHeader,
