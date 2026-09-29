@@ -147,6 +147,21 @@ npm run deploy -- \
 | `--enable-chat`                   | Deploy the opt-in Chat assistant stack. Requires the ability to invoke the chosen Claude model via Amazon Bedrock in the deployment region (verify with a test prompt first).                                                                                  |
 | `--bedrock-model-id`              | Bedrock model or cross-region inference profile id for chat (only with `--enable-chat`). Defaults to `us.anthropic.claude-haiku-4-5-20251001-v1:0`.                                                                                                            |
 | `--deployer-role-name`            | IAM role name this deployment runs as. Registered as a Lake Formation Data Lake Admin by the Usage Analysis stack so its grants succeed (only relevant with `--enable-usage-analysis`). Derived from your caller identity if omitted, falling back to `Admin`. |
+| `-y`, `--yes`                     | Skip the confirmation prompt and run non-interactively. Useful for automation and CI.                                                                                                                                                                          |
+
+#### Updating an existing deployment
+
+Re-running `npm run deploy` against an account that already has the `CapabilityInsightsForAWS` stack is treated as an **update**: any parameter you don't pass keeps its current deployed value. You only supply the flags you want to change — there is no need to re-enter the VPC, subnets, buckets, or source access point, and you are not re-prompted for them.
+
+```bash
+# Change only the data sources — every other parameter is reused from the deployed stack
+npm run deploy -- --source-folders public,my-custom-folder
+
+# Redeploy with no parameter changes (e.g. to pick up a new release) — reuses everything
+npm run deploy -- --yes
+```
+
+The deploy prints the target account and region and asks you to confirm before making any changes. Pass `-y`/`--yes` to skip that prompt for non-interactive or automated deploys.
 
 #### Deploying without Admin access
 
