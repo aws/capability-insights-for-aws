@@ -36,8 +36,14 @@ Deploy options (pass as flags or omit to be prompted):
                                          Only relevant with --enable-usage-analysis.
   -y, --yes                              Skip confirmation prompts
 
+Updating an existing deployment:
+  If the CapabilityInsightsForAWS stack already exists, this is an update: any
+  parameter you don't pass keeps its current deployed value, so you only need
+  to supply the flags you want to change (no need to re-enter the VPC, subnets,
+  buckets, etc.).
+
 Examples:
-  # Provide all parameters inline
+  # First deploy — provide all parameters inline
   $0 deploy \\
     --private-vpc-id vpc-0abc123 \\
     --backend-subnet-id subnet-0abc123 \\
@@ -46,8 +52,12 @@ Examples:
     --source-access-point-arn arn:aws:s3:us-east-1:123456789012:accesspoint/my-access-point \\
     --source-folders public
 
-  # Interactive — prompts for any missing parameters
+  # First deploy — interactive, prompts for any missing parameters
   $0 deploy
+
+  # Update an existing deployment — change only the source folders,
+  # everything else is reused from the deployed stack
+  $0 deploy --source-folders public,my-custom-folder
 
   $0 teardown
 
@@ -73,6 +83,25 @@ prompt_if_empty() {
     read -rp "$prompt: " current
     printf -v "$varname" '%s' "$current"
   fi
+}
+
+# True if the named CloudFormation stack already exists (any state we can
+# describe). Used to distinguish a first-time create from an update.
+stack_exists() {
+  aws cloudformation describe-stacks --stack-name "$1" >/dev/null 2>&1
+}
+
+# Current value of a parameter on an already-deployed stack, or empty string
+# if the stack or parameter isn't found. Lets an update reuse the deployed
+# value for any parameter the caller didn't pass on the command line.
+get_stack_param() {
+  local value
+  value=$(aws cloudformation describe-stacks --stack-name "$1" \
+    --query "Stacks[0].Parameters[?ParameterKey=='$2'].ParameterValue" \
+    --output text 2>/dev/null) || value=""
+  # `--output text` yields the literal "None" when the query matches nothing.
+  [[ "$value" == "None" ]] && value=""
+  printf '%s' "$value"
 }
 
 # Preflight for --enable-chat: the Chat stack grants the IAM permission to call
@@ -178,17 +207,46 @@ cmd_deploy() {
   echo "── Capability Insights — Deploy ──"
   echo ""
 
-  prompt_if_empty private_vpc_id "PrivateVpcId"
-  prompt_if_empty backend_subnet_id "BackendSubnetId"
-  prompt_if_empty api_access_subnet_id "ApiAccessSubnetId"
-  prompt_if_empty deployment_assets_bucket_name "DeploymentAssetsBucketName"
-  prompt_if_empty source_access_point_arn "SourceAccessPointArn"
-  prompt_if_empty source_folders "SourceFolders (comma-separated, default: public)"
-  if [[ -z "$source_folders" ]]; then
-    source_folders="public"
+  # Distinguish a first-time create from an update. On an update the base
+  # parameters (VPC, subnets, buckets, source config) are already stored on the
+  # stack, so we don't force the caller to re-supply them — any parameter not
+  # passed on the command line is backfilled from the deployed stack, and only
+  # the flags they did pass change (issue #68). On a fresh deploy every core
+  # parameter is required, so we prompt for anything missing as before.
+  local is_update="false"
+  if stack_exists CapabilityInsightsForAWS; then
+    is_update="true"
+    echo "Existing CapabilityInsightsForAWS stack found — updating."
+    echo "Parameters you don't pass keep their current deployed values; pass only what you want to change."
+    echo ""
+    [[ -z "$private_vpc_id" ]]                && private_vpc_id=$(get_stack_param CapabilityInsightsForAWS PrivateVpcId)
+    [[ -z "$backend_subnet_id" ]]             && backend_subnet_id=$(get_stack_param CapabilityInsightsForAWS BackendSubnetId)
+    [[ -z "$api_access_subnet_id" ]]          && api_access_subnet_id=$(get_stack_param CapabilityInsightsForAWS ApiAccessSubnetId)
+    [[ -z "$deployment_assets_bucket_name" ]] && deployment_assets_bucket_name=$(get_stack_param CapabilityInsightsForAWS DeploymentAssetsBucketName)
+    [[ -z "$source_access_point_arn" ]]       && source_access_point_arn=$(get_stack_param CapabilityInsightsForAWS SourceAccessPointArn)
+    [[ -z "$source_folders" ]]                && source_folders=$(get_stack_param CapabilityInsightsForAWS SourceFolders)
+  else
+    prompt_if_empty private_vpc_id "PrivateVpcId"
+    prompt_if_empty backend_subnet_id "BackendSubnetId"
+    prompt_if_empty api_access_subnet_id "ApiAccessSubnetId"
+    prompt_if_empty deployment_assets_bucket_name "DeploymentAssetsBucketName"
+    prompt_if_empty source_access_point_arn "SourceAccessPointArn"
+    prompt_if_empty source_folders "SourceFolders (comma-separated, default: public)"
+    if [[ -z "$source_folders" ]]; then
+      source_folders="public"
+    fi
   fi
+
+  # Validate the SourceFolders format for whatever value we ended up with
+  # (passed on the command line, prompted, or backfilled from the stack). On a
+  # fresh interactive deploy we re-prompt; on an update we fail fast so an
+  # invalid --source-folders can't silently reuse the old value.
   while [[ ! "$source_folders" =~ ^[a-zA-Z0-9_-]+(,[a-zA-Z0-9_-]+)*$ ]]; do
-    echo "Invalid format. Must be a comma-separated list of folder names (letters, numbers, hyphens, underscores)."
+    echo "Invalid SourceFolders format. Must be a comma-separated list of folder names (letters, numbers, hyphens, underscores)."
+    if [[ "$is_update" == "true" ]]; then
+      echo "Fix the --source-folders value and re-run."
+      exit 1
+    fi
     read -rp "SourceFolders (comma-separated, default: public): " source_folders
     if [[ -z "$source_folders" ]]; then
       source_folders="public"
