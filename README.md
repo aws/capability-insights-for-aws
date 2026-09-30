@@ -467,6 +467,29 @@ Adds personalization. Deployed when you pass `--enable-usage-analysis` to `npm r
 | Lake Formation Permissions     | Grants the analyzer role read access to the Glue database                                  |
 | EventBridge Rule               | Schedules the state machine to run daily (configurable via `AnalysisSchedule` parameter)   |
 
+**Tuning the scheduled runs.** Two knobs are CloudFormation parameters on the `CapabilityInsightsUsageAnalysis` stack and apply to the automated (scheduled) analysis:
+
+| Parameter          | Default       | Description                                                                      |
+| ------------------ | ------------- | -------------------------------------------------------------------------------- |
+| `AnalysisSchedule` | `rate(1 day)` | EventBridge schedule expression for automated runs (`rate(...)` or `cron(...)`). |
+| `DaysToScan`       | `30`          | CloudTrail lookback window in days (1–90) for scheduled analyzer runs.           |
+
+`npm run deploy` does not expose these as flags. Override them on the manual CloudFormation deploy (`--parameter-overrides AnalysisSchedule="rate(12 hours)" DaysToScan=60`) or edit the parameters on the existing stack.
+
+**On-demand runs via the API.** Besides the Settings-page **Run usage analysis** button, you can start a run by calling `POST /analysis` (through the API Gateway VPC endpoint, from within the VPC):
+
+```json
+{
+  "scope": "account",
+  "analyzers": ["cloudtrail", "cloudformation"],
+  "analyzerParams": {
+    "cloudtrail": { "bucket": "my-cloudtrail-logs-bucket", "prefix": "AWSLogs/", "daysToScan": 30 }
+  }
+}
+```
+
+`scope` is required. `analyzers` defaults to `["cloudtrail", "cloudformation"]`. Under `analyzerParams.cloudtrail`, `bucket` falls back to the deploy-time `--cloudtrail-bucket`, `prefix` defaults to `AWSLogs/`, and `daysToScan` defaults to `30`. These per-request overrides apply only to that run; the scheduled runs use the stack parameters above. Poll progress with `GET /analysis?executionArn=<arn>`.
+
 ### Policy Enforcer Stack (opt-in)
 
 Adds regional governance. Deployed when you pass `--enable-policy-enforcer` to `npm run deploy`. Exposes a REST API for creating named policies that select target regions and a computation mode (intersection or union), then generates an IAM Managed Policy or Service Control Policy whose `NotAction` allow-list is the set of capabilities available in those regions. The system creates and refreshes the policy resource on demand; **attaching it to roles or OUs is left to you**.
