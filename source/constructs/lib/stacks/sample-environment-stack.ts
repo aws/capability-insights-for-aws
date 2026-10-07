@@ -5,6 +5,8 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 
 export interface CapabilityInsightsSampleEnvironmentProps extends cdk.StackProps {
   ec2KeyPair?: string;
+  /** CIDR allowed to SSH into the helper instance, e.g. `203.0.113.10/32`. No inbound SSH when omitted. */
+  sshAllowedCidr?: string;
 }
 
 export enum CapabilityInsightsSampleEnvironmentOutputs {
@@ -127,6 +129,7 @@ export class CapabilityInsightsSampleEnvironmentStack extends cdk.Stack {
     });
 
     const keypairName = props?.ec2KeyPair;
+    const sshAllowedCidr = props?.sshAllowedCidr;
 
     // IAM role that the instances in VPC will use
     const instanceRoleName = `CapabilityInsightsSampleEnvInstanceRole`;
@@ -162,15 +165,19 @@ export class CapabilityInsightsSampleEnvironmentStack extends cdk.Stack {
           description: 'Allow all outbound traffic',
         },
       ],
-      securityGroupIngress: [
-        {
-          ipProtocol: 'tcp',
-          cidrIp: '0.0.0.0/0',
-          fromPort: 22, // ssh
-          toPort: 22,
-          description: 'Allow incoming SSH from anywhere',
-        },
-      ],
+      // Only open SSH to the caller-supplied CIDR (deployment/dev.sh defaults it to
+      // the deployer's public IP), never to the whole internet.
+      securityGroupIngress: sshAllowedCidr
+        ? [
+            {
+              ipProtocol: 'tcp',
+              cidrIp: sshAllowedCidr,
+              fromPort: 22, // ssh
+              toPort: 22,
+              description: 'Allow incoming SSH from the --ssh-cidr source (defaults to the deployer IP)',
+            },
+          ]
+        : undefined,
     });
     const latestLinuxAmiId = new cdk.CfnParameter(this, 'LatestAmazonLinux2023AmiId', {
       type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>',

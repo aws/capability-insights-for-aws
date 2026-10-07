@@ -17,6 +17,8 @@ Commands:
 
 Setup options:
   --ec2-key-pair <name>   EC2 key pair name (optional)
+  --ssh-cidr <cidr>       CIDR allowed to SSH into the helper instance
+                          (default: your current public IP as /32)
 
 Deploy options:
   --source-access-point-arn <arn>  S3 access point ARN for capability data source
@@ -43,20 +45,40 @@ get_stack_output() {
 }
 
 cmd_setup() {
-  local key_pair=""
+  local key_pair="" ssh_cidr=""
   while [[ $# -gt 0 ]]; do
     case $1 in
       --ec2-key-pair) key_pair="$2"; shift 2 ;;
+      --ssh-cidr) ssh_cidr="$2"; shift 2 ;;
       *) echo "Unknown option: $1"; usage ;;
     esac
   done
 
+  # Restrict SSH to the deployer's public IP unless a CIDR was given. If the IP
+  # can't be detected, the instance gets no inbound SSH rule at all.
+  if [[ -z "$ssh_cidr" ]]; then
+    local public_ip ipv4_re='^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
+    public_ip=$(curl -fsS --max-time 10 https://checkip.amazonaws.com | tr -d '[:space:]') || true
+    if [[ "$public_ip" =~ $ipv4_re ]]; then
+      ssh_cidr="$public_ip/32"
+    else
+      echo "Warning: could not detect your public IP, so the instance will not accept SSH."
+      echo "         Re-run with --ssh-cidr <cidr>${key_pair:+ --ec2-key-pair $key_pair} to allow it."
+    fi
+  fi
+
   echo "── Deploying CapabilityInsightsSampleEnvironment ──"
+  if [[ -n "$ssh_cidr" ]]; then
+    echo "  SSH allowed from: $ssh_cidr"
+  fi
   cd "$ROOT_DIR/source/constructs"
 
   local context_args=()
   if [[ -n "$key_pair" ]]; then
-    context_args=(-c "ec2KeyPair=$key_pair")
+    context_args+=(-c "ec2KeyPair=$key_pair")
+  fi
+  if [[ -n "$ssh_cidr" ]]; then
+    context_args+=(-c "sshAllowedCidr=$ssh_cidr")
   fi
 
   npx cdk bootstrap

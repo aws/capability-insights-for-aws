@@ -6,4 +6,5 @@ const app = new App();
 
 new CapabilityInsightsSampleEnvironmentStack(app, 'CapabilityInsightsSampleEnvironment', {
   ec2KeyPair: getEnv(app, EnvironmentConfig.Ec2KeyPair),
+  sshAllowedCidr: getEnv(app, EnvironmentConfig.SshAllowedCidr),
 });

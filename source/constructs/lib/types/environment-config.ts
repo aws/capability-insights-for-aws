@@ -2,6 +2,7 @@ import { App } from 'aws-cdk-lib';
 
 export enum EnvironmentConfig {
   Ec2KeyPair = 'ec2KeyPair',
+  SshAllowedCidr = 'sshAllowedCidr',
 }
 
 export function getEnv(app: App, key: EnvironmentConfig): string | undefined {

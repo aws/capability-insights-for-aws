@@ -564,7 +564,7 @@ A React dashboard built with [Cloudscape Design System](https://cloudscape.desig
 
 This repository contains two CloudFormation stacks. The Capability Insights stack is what users deploy into their existing infrastructure. The Sample Environment stack creates a VPC, subnets, EC2 instance, and deployment bucket that mimic a customer environment. Use it for local development and testing when you don't have an existing environment to deploy into.
 
-Since the dashboard is only accessible from within the VPC, the sample stack includes an EC2 instance that you can SSH into and use as a proxy to reach the dashboard from your machine. See [Accessing the Website from Your Machine](#accessing-the-website-from-your-machine) for a step-by-step guide.
+Since the dashboard is only accessible from within the VPC, the sample stack includes an EC2 instance that you can SSH into and use as a proxy to reach the dashboard from your machine. Its security group accepts SSH only from the public IP of the machine that runs `npm run dev:setup` (detected via `https://checkip.amazonaws.com`); pass `--ssh-cidr <cidr>` to allow a different range. If your IP can't be detected, the instance accepts no SSH until you re-run setup with `--ssh-cidr` (plus your original `--ec2-key-pair`, if any). See [Accessing the Website from Your Machine](#accessing-the-website-from-your-machine) for a step-by-step guide.
 
 To get started, generate an SSH key pair and import it into EC2:
 
@@ -579,7 +579,7 @@ Then build and deploy the stacks:
 # Install dependencies
 npm install
 
-# Deploy the CapabilityInsightsSampleEnvironment stack (optionally pass --ec2-key-pair <name>)
+# Deploy the CapabilityInsightsSampleEnvironment stack (optionally pass --ec2-key-pair <name> and --ssh-cidr <cidr>)
 npm run dev:setup -- --ec2-key-pair ci-key
 
 # Deploy Capability Insights using the CapabilityInsightsSampleEnvironment outputs
@@ -601,7 +601,7 @@ npm run dev:setup    # reconciles CapabilityInsightsSampleEnvironment (no-op if 
 npm run dev:deploy   # then update Capability Insights itself (use the same flags as your initial deploy)
 ```
 
-> If your initial deploy passed `--ec2-key-pair`, `--enable-usage-analysis`, or other flags, pass the same ones again — the scripts don't remember them between runs.
+> If your initial deploy passed `--ec2-key-pair`, `--ssh-cidr`, `--enable-usage-analysis`, or other flags, pass the same ones again — the scripts don't remember them between runs.
 
 ### Available Scripts
 
@@ -629,6 +629,8 @@ First, find your EC2 instance's public IP address:
 ```bash
 ssh -D 8080 -N -i ~/.ssh/ci-key ec2-user@<EC2_INSTANCE_PUBLIC_IP>
 ```
+
+> SSH is only allowed from the IP that `npm run dev:setup` detected (or the `--ssh-cidr` you passed). If the connection times out — for example, because your public IP changed — re-run setup from your current network with the same `--ec2-key-pair` you originally used, if any (e.g. `npm run dev:setup -- --ec2-key-pair ci-key`; adding, changing, or dropping it replaces the instance), then look up the instance's public IP again, since setup also replaces the instance when a newer Amazon Linux 2023 AMI is available. If you're behind an HTTP proxy or VPN, the detected IP may not be the one your SSH traffic uses; pass that address with `--ssh-cidr <ip>/32`.
 
 Launch Chrome using that proxy:
 
