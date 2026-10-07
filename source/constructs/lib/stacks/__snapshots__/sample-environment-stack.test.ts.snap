@@ -395,15 +395,6 @@ exports[`CloudFormation template matches snapshot 1`] = `
             "IpProtocol": "-1",
           },
         ],
-        "SecurityGroupIngress": [
-          {
-            "CidrIp": "0.0.0.0/0",
-            "Description": "Allow incoming SSH from anywhere",
-            "FromPort": 22,
-            "IpProtocol": "tcp",
-            "ToPort": 22,
-          },
-        ],
         "VpcId": {
           "Fn::GetAtt": [
             "CapabilityInsightsSampleEnvironmentVpc",
