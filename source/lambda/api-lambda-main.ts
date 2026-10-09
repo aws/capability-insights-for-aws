@@ -17,6 +17,7 @@ import {
   deletePolicyRoute,
   refreshPolicyRoute,
   previewPolicyRoute,
+  allowTemplateRoute,
   refreshAllPoliciesRoute,
 } from './routes/policy-routes';
 
@@ -49,6 +50,7 @@ paramRouter.register(HttpMethod.PUT, '/policies/:policyName', updatePolicyRoute)
 paramRouter.register(HttpMethod.DELETE, '/policies/:policyName', deletePolicyRoute);
 paramRouter.register(HttpMethod.POST, '/policies/:policyName/refresh', refreshPolicyRoute);
 paramRouter.register(HttpMethod.GET, '/policies/:policyName/preview', previewPolicyRoute);
+paramRouter.register(HttpMethod.GET, '/policies/:policyName/allow-template', allowTemplateRoute);
 
 // --- Main handler ---
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {

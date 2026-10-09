@@ -29,7 +29,7 @@ The dashboard covers:
 - **API operations** — individual API action availability per region for each AWS service
 - **CloudFormation resource types** — which resource types are supported in each region
 - **Personalized usage (opt-in)** — a "My Stuff" view that filters everything down to services, APIs, and resources actually used in your account, derived from CloudTrail and CloudFormation
-- **Regional governance policies (opt-in)** — generate IAM Managed Policies and Service Control Policies that deny capabilities not available in your chosen regions
+- **Regional governance policies (opt-in)** — generate IAM customer managed policies and Service Control Policies that deny capabilities not available in your chosen regions
 - **Conversational assistant (opt-in)** — a chat drawer that answers availability, comparison, and usage questions in natural language; the model interprets intent while the answer is computed deterministically from the same capability catalog
 
 ![Dashboard overview](docs/images/dashboard-overview.png)
@@ -44,7 +44,7 @@ The solution deploys a static website, REST API, and Lambda functions into your 
 
 ![Usage Analysis architecture](docs/images/personalization-architecture.png)
 
-A separate opt-in stack adds regional governance: a REST API and Lambdas that generate IAM Managed Policies or Service Control Policies whose allow-lists reflect what's available in your chosen regions, derived from the same capability catalog the dashboard uses.
+A separate opt-in stack adds regional governance: a REST API and Lambdas that generate IAM customer managed policies or Service Control Policies that restrict workloads to what's available in your chosen regions, derived from the same capability catalog the dashboard uses.
 
 ![Policy Enforcer architecture](docs/images/policy-enforcer-architecture.png)
 
@@ -262,8 +262,8 @@ The "My stuff" toggle becomes usable once the first run finishes.
 
 The Policy Enforcer is an optional third stack
 (`template/policy-enforcer.template.json`, also in `build-assets.zip`) that
-generates IAM Managed Policies or Service Control Policies whose `NotAction`
-allow-list reflects the capabilities available in your chosen regions. The
+generates IAM customer managed policies or Service Control Policies that deny the
+capabilities not available in your chosen regions. The
 manual path:
 
 1. Deploy `CapabilityInsightsPolicyEnforcer` (params: `PrivateVpcId`,
@@ -396,19 +396,23 @@ The personalized data is produced by analyzers that read your CloudTrail logs an
 
 ### Generating regional governance policies (opt-in)
 
-If you deployed with `--enable-policy-enforcer`, the side navigation gains a **Policy Enforcer** entry. Use it to generate IAM Managed Policies or Service Control Policies that deny services and APIs unavailable in your target regions — useful when you want to confine workloads to a primary region without hand-curating allow-lists.
+If you deployed with `--enable-policy-enforcer`, the side navigation gains a **Policy Enforcer** entry. Use it to generate IAM customer managed policies or Service Control Policies that deny services and APIs unavailable in your target regions — useful when you want to confine workloads to a primary region without hand-curating allow-lists.
 
 ![Policy Enforcer list](docs/images/user-guide-policy-enforcer-list.png)
 
-Click **Create policy** and provide a name, an optional description and tags, the target regions, a computation mode (intersection or union), and the policy type (IAM Managed Policy or Service Control Policy). Intersection produces an allow-list of capabilities available in _all_ selected regions; union produces one available in _any_ selected region.
+Click **Create policy** and provide a name, an optional description and tags, the target regions, and the policy type (IAM Customer Managed Policy or Service Control Policy); for an IAM Customer Managed Policy, also the IAM policy version (see below). A capability counts as available only if it is available in _all_ selected regions (intersection; the API also accepts union, where _any_ selected region is enough). The generated policy denies the capabilities that are not available.
 
 ![Create Policy form](docs/images/user-guide-policy-enforcer-create.png)
 
-Once created, the policy detail page shows the configuration, refresh status, a preview of the generated allow-list, and the Policy ARNs of the resulting IAM Managed Policies. Service Control Policies that overflow a single 5,120-character document are split across multiple managed policies (Part 1, Part 2, etc.) up to the AWS Organizations limit of 5 per target — copy each document into the OU or account where you want to attach it.
+Once created, the policy detail page shows the configuration, refresh status, a preview of the capabilities available in the selected regions, and the Policy ARNs of the resulting IAM customer managed policies. Service Control Policies that overflow a single 5,120-character document are split across multiple managed policies (Part 1, Part 2, etc.) up to the AWS Organizations limit of 5 per target — copy each document into the OU or account where you want to attach it.
 
 ![Policy detail](docs/images/user-guide-policy-enforcer-detail.png)
 
-**Attaching the result is left to you**: for IAM-typed policies, attach `arn:...:policy/PolicyEnforcer-<name>` to the roles or users that should be governed; for SCP-typed policies, copy each document and attach it to the target OU or account in AWS Organizations.
+**Attaching the result is left to you**: for IAM-typed policies, attach every Policy ARN listed on the detail page to the roles or users that should be governed, alongside their own permission policies. The generated policies contain only `Deny` statements and grant no permissions: a role still needs its own policies to allow anything. A refresh can add or remove parts: after a refresh, attach any new part, and detach and delete any `PolicyEnforcer-<name>-Part<N>` that is no longer listed. For SCP-typed policies, copy each document and attach it to the target OU or account in AWS Organizations; refreshes update the documents on the detail page, not your SCPs, so re-copy them after a refresh.
+
+For IAM-typed policies, you can also pick **Allow (starter template)** as the _IAM policy version_ when you create the policy (its page then opens on the template), or switch the detail page's **Deny (managed policies)** / **Allow (starter template)** toggle to it at any time: `Allow` statements that grant each service (`service:*`) with at least one capability available in the selected regions, split into parts that each fit one managed policy. Use it as a starting point for your own permission policies, paired with an SCP from this tool or with this policy's Deny managed policies, either of which blocks the unavailable actions within those services: download or copy the parts, remove the services your workloads don't need, and create the result yourself. Until you trim it, the template grants every available service, IAM included. Capability Insights doesn't create, attach, or refresh it, so your trimmed copy is never overwritten.
+
+![Allow starter template](docs/images/user-guide-policy-enforcer-allow-template.png)
 
 To re-run every policy against a fresh catalog (e.g. after a daily DataFetch update introduces new APIs), use **Refresh all policies** on the Settings page. Individual policies also refresh whenever you re-save them.
 
@@ -492,11 +496,11 @@ Adds personalization. Deployed when you pass `--enable-usage-analysis` to `npm r
 
 ### Policy Enforcer Stack (opt-in)
 
-Adds regional governance. Deployed when you pass `--enable-policy-enforcer` to `npm run deploy`. Exposes a REST API for creating named policies that select target regions and a computation mode (intersection or union), then generates an IAM Managed Policy or Service Control Policy whose `NotAction` allow-list is the set of capabilities available in those regions. The system creates and refreshes the policy resource on demand; **attaching it to roles or OUs is left to you**.
+Adds regional governance. Deployed when you pass `--enable-policy-enforcer` to `npm run deploy`. Exposes a REST API for creating named policies that select target regions and a computation mode (intersection or union), then generates IAM customer managed policies or Service Control Policies that deny the capabilities not available in those regions. The system creates and refreshes the policy resource on demand; **attaching it to roles or OUs is left to you**.
 
-Refresh runs synchronously when you `POST /policies`, `PUT /policies/:id`, or `POST /policies/:id/refresh` — there is no background schedule. Catalog data only changes when the DataFetch Lambda runs, so re-computing on its own cadence has no benefit.
+Refresh runs synchronously when you `POST /policies`, `PUT /policies/:id`, or `POST /policies/:id/refresh`. Every policy is also refreshed weekly by an EventBridge schedule, and on demand from **Refresh all policies** on the Settings page.
 
-A generated allow-list can exceed AWS's per-document size limits. The feature handles this by splitting across multiple documents: IAM Managed Policies split at 6,144 characters each, and Service Control Policies split at 5,120 characters each across up to 5 documents (the AWS Organizations limit of 5 SCPs per target). Generation only fails when even 5 SCP documents cannot hold the allow-list — in which case, reduce scope (fewer regions, intersection mode) or use the IAM policy type.
+Every statement in the policies it creates is a `Deny`, for both policy types, so a generated policy never grants permissions: the principal's own policies must still allow what it needs. The Allow starter template for IAM-type policies (`GET /policies/:policyName/allow-template`) is display-only and is never created, attached, or refreshed. IAM customer managed policies list the unavailable actions in `Deny Action` statements, split across documents of up to 6,144 characters each; attach every part, and check that the role, user, or group has room for them under its managed-policy quota. Actions and services missing from the catalog are not denied. An IAM service prefix is denied as a whole (`service:*`) only when no catalog service that uses it has an available capability; when services share a prefix (for example Amazon Connect and Contact Lens under `connect`) and one of them is available, only the unavailable actions are listed. In IAM-type policies, the `execute-api` and `neptune-db` namespaces are never denied as a whole. Service Control Policies prefer one `Deny NotAction` document that lists the available capabilities (never split, because combining split `NotAction` documents would deny everything), plus `Deny Action` documents that block the unavailable actions within the services it lists. When that list doesn't fit in one 5,120-character document, or the documents together exceed the AWS Organizations limit of 5 SCPs per target, the SCP falls back to `Deny Action` statements across up to 5 documents, and services missing from the catalog are not denied. SCP generation fails when neither fits — in which case, use the IAM policy type or select fewer regions. Generation also fails when every capability in the catalog is available in the selected regions, since there is nothing to restrict.
 
 | Resource                       | Description                                                                                    |
 | ------------------------------ | ---------------------------------------------------------------------------------------------- |

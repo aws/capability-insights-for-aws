@@ -10,6 +10,7 @@ import type {
   RefreshResponse,
   CreatePolicyRequest,
   PreviewResponse,
+  AllowTemplateResponse,
 } from '@capability-insights/shared/types/policy-enforcer/policy-api';
 import { AnalyzerType, ExecutionStatus } from '@capability-insights/shared/types/analysis';
 import { Scope } from '@capability-insights/shared/types/scope';
@@ -290,6 +291,16 @@ export class CapabilityInsightsClient {
     const res = await fetch(`${baseUrl}/policies/${encodeURIComponent(policyName)}/preview`);
     if (!res.ok) throw new Error(`Preview failed: ${res.status}`);
     return (await res.json()) as PreviewResponse;
+  }
+
+  async getAllowTemplate(policyName: string): Promise<AllowTemplateResponse> {
+    const baseUrl = await this.getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/policies/${encodeURIComponent(policyName)}/allow-template`);
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message || `Allow template failed: ${res.status}`);
+    }
+    return (await res.json()) as AllowTemplateResponse;
   }
 
   async deletePolicy(policyName: string): Promise<void> {

@@ -288,7 +288,7 @@ export default function PolicyEnforcer() {
       header={
         <Header
           variant="h1"
-          description="Generate IAM Managed Policies and Service Control Policies that deny services and APIs unavailable in your target regions."
+          description="Generate IAM customer managed policies and Service Control Policies that deny services and APIs unavailable in your target regions."
           actions={
             <Button variant="primary" href="/policy-enforcer/create" disabled={!policyEnforcerEnabled}>
               Create policy

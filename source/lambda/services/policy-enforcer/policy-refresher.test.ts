@@ -11,7 +11,8 @@ import {
 import type { PolicyConfiguration } from '@capability-insights/shared/types/policy-enforcer/policy-configuration';
 import type { ApiService } from '@capability-insights/shared/types/capability/api';
 
-// Minimal catalog: one service, one API available in us-east-1.
+// Minimal catalog: one API available in us-east-1 and one that isn't, so an
+// IAM-type policy has something to restrict.
 const catalog: ApiService[] = [
   {
     sdkServiceName: 'S3',
@@ -22,6 +23,12 @@ const catalog: ApiService[] = [
         apiAction: 'GetObject',
         homepage: '',
         regionalAvailability: { 'us-east-1': 'Available' },
+      },
+      {
+        apiName: 'S3+SelectObjectContent',
+        apiAction: 'SelectObjectContent',
+        homepage: '',
+        regionalAvailability: {},
       },
     ],
   },
@@ -68,6 +75,27 @@ describe('refreshPolicy', () => {
     expect(applier.apply).toHaveBeenCalledOnce();
     expect(result.policyArn).toContain('PolicyEnforcer-');
     expect(result.actionCount).toBeGreaterThanOrEqual(0);
+  });
+
+  it('returns an empty additionalPolicyArns list (not undefined) for a single-part result', async () => {
+    // The store skips undefined fields, so undefined would leave previously
+    // deleted parts in the stored ARN list.
+    const applier = makeApplierStub();
+    const result = await refreshPolicy(makePolicy('p1'), catalog, applier);
+
+    expect(result.additionalPolicyArns).toEqual([]);
+  });
+
+  it('passes every existing part to the applier and returns the parts it keeps', async () => {
+    const applier = makeApplierStub();
+    applier.apply.mockResolvedValueOnce({ policyArn: 'arn:p1', additionalPolicyArns: ['arn:p2', 'arn:p3'] });
+    const policy = { ...makePolicy('p1'), policyArn: 'arn:p1', additionalPolicyArns: ['arn:p2', 'arn:p3', 'arn:p4'] };
+
+    const result = await refreshPolicy(policy, catalog, applier);
+
+    expect(applier.apply.mock.calls[0][3]).toEqual(['arn:p1', 'arn:p2', 'arn:p3', 'arn:p4']);
+    expect(result.policyArn).toBe('arn:p1');
+    expect(result.additionalPolicyArns).toEqual(['arn:p2', 'arn:p3']);
   });
 
   // Note: the PolicyTooLargeError path (generator returns `error`) is covered

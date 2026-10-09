@@ -74,9 +74,12 @@ vi.mock('../policy-enforcer/policy-document-generator', () => {
     partialDenyActionCount: 0,
     error: undefined as string | undefined,
   }));
+  const generateAllowTemplate = vi.fn();
   return {
     generatePolicyDocument,
+    generateAllowTemplate,
     __generateStub: generatePolicyDocument,
+    __allowTemplateStub: generateAllowTemplate,
   };
 });
 
@@ -95,6 +98,7 @@ import {
   deletePolicyRoute,
   refreshPolicyRoute,
   previewPolicyRoute,
+  allowTemplateRoute,
   _resetForTests,
 } from './policy-routes';
 import { validatePolicyConfiguration, validatePolicyUpdate } from '../policy-enforcer/validation';
@@ -110,7 +114,10 @@ import {
 import { __applierStub as applierMock } from '../services/policy-enforcer/iam-policy-applier';
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — exposed by the vi.mock factory above
-import { __generateStub as generatePolicyDocumentMock } from '../policy-enforcer/policy-document-generator';
+import {
+  __generateStub as generatePolicyDocumentMock,
+  __allowTemplateStub as generateAllowTemplateMock,
+} from '../policy-enforcer/policy-document-generator';
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — exposed by the vi.mock factory above
 import { __getObjectStub as mockGetObject } from '../services/s3-client';
@@ -167,6 +174,7 @@ beforeEach(() => {
   applierMock.deleteAll.mockReset();
   mockGetObject.mockReset();
   generatePolicyDocumentMock.mockReset();
+  generateAllowTemplateMock.mockReset();
   generatePolicyDocumentMock.mockReturnValue({
     documents: [{ Version: '2012-10-17', Statement: [] }],
     totalSize: 100,
@@ -500,6 +508,67 @@ describe('previewPolicyRoute', () => {
     mockGetObject.mockRejectedValueOnce(new Error('NoSuchKey'));
 
     const result = await previewPolicyRoute(makeEvent(), { policyName: 'Payments' });
+    expect(result.statusCode).toBe(503);
+  });
+});
+
+describe('allowTemplateRoute', () => {
+  const templateDoc = {
+    Version: '2012-10-17',
+    Statement: [{ Sid: 'PolicyEnforcerAllowTemplate1', Effect: 'Allow', Action: ['s3:*'], Resource: '*' }],
+  };
+
+  it('returns 404 when the policy is missing', async () => {
+    storeMock.getPolicy.mockResolvedValueOnce(null);
+    const result = await allowTemplateRoute(makeEvent(), { policyName: 'missing' });
+    expect(result.statusCode).toBe(404);
+  });
+
+  it('returns 400 for an SCP-type policy', async () => {
+    storeMock.getPolicy.mockResolvedValueOnce({ ...samplePolicy, policyType: 'SCP' });
+    const result = await allowTemplateRoute(makeEvent(), { policyName: 'Payments' });
+    expect(result.statusCode).toBe(400);
+    expect(generateAllowTemplateMock).not.toHaveBeenCalled();
+  });
+
+  it('returns the template without applying or storing anything', async () => {
+    const catalog = [{ sdkServiceName: 's3', sdkServiceFullName: 's3', apis: [] }];
+    storeMock.getPolicy.mockResolvedValueOnce(samplePolicy);
+    mockGetObject.mockResolvedValueOnce(JSON.stringify(catalog));
+    generateAllowTemplateMock.mockReturnValueOnce({ documents: [templateDoc], totalSize: 120 });
+
+    const result = await allowTemplateRoute(makeEvent(), { policyName: 'Payments' });
+
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toEqual({ documents: [templateDoc], totalSize: 120 });
+    expect(generateAllowTemplateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ catalogData: catalog, configuration: samplePolicy }),
+    );
+    expect(applierMock.apply).not.toHaveBeenCalled();
+    expect(applierMock.deleteAll).not.toHaveBeenCalled();
+    expect(storeMock.createPolicy).not.toHaveBeenCalled();
+    expect(storeMock.updatePolicy).not.toHaveBeenCalled();
+    expect(storeMock.deletePolicy).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when nothing is available in the selected regions', async () => {
+    storeMock.getPolicy.mockResolvedValueOnce(samplePolicy);
+    mockGetObject.mockResolvedValueOnce('[]');
+    generateAllowTemplateMock.mockReturnValueOnce({
+      documents: [],
+      totalSize: 0,
+      error: 'No capabilities are available',
+    });
+
+    const result = await allowTemplateRoute(makeEvent(), { policyName: 'Payments' });
+    expect(result.statusCode).toBe(400);
+  });
+
+  it('returns 503 when the catalog is unavailable', async () => {
+    storeMock.getPolicy.mockResolvedValueOnce(samplePolicy);
+    mockGetObject.mockRejectedValueOnce(new Error('NoSuchKey'));
+
+    const result = await allowTemplateRoute(makeEvent(), { policyName: 'Payments' });
     expect(result.statusCode).toBe(503);
   });
 });

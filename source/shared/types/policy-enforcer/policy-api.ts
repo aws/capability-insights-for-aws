@@ -62,6 +62,25 @@ export interface PreviewResponse {
   splitRequired: boolean;
 }
 
+/** One IAM policy document of the Allow starter template. */
+export interface AllowTemplateDocument {
+  Version: string;
+  Statement: { Sid: string; Effect: string; Action?: string[]; Resource: string }[];
+}
+
+/**
+ * Response body for `GET /policies/:policyName/allow-template` (IAM-type
+ * policies only): `Allow` statements granting each service (`service:*`) with
+ * a capability available in the selected regions, for the user to copy and
+ * trim. Capability Insights never creates, attaches, or refreshes it.
+ */
+export interface AllowTemplateResponse {
+  /** Each document fits one IAM managed policy. */
+  documents: AllowTemplateDocument[];
+  /** Total character count across all documents. */
+  totalSize: number;
+}
+
 /** Response body for `POST /policies/:policyId/refresh` (and inline-refresh fields on POST/PUT). */
 export interface RefreshResponse {
   message: string;

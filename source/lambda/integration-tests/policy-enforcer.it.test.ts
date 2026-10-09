@@ -152,7 +152,9 @@ describe('policy enforcer refresh — integration', () => {
       expect(iamState.lastRefreshOutcome).toBe('success');
       expect(iamState.policyArn).toBeDefined();
       expect(iamState.lastActionCount ?? 0).toBeGreaterThan(0);
-      await expectPolicyDocumentValid(iam, iamState.policyArn!);
+      for (const arn of [iamState.policyArn!, ...(iamState.additionalPolicyArns ?? [])]) {
+        await expectPolicyDocumentValid(iam, arn);
+      }
 
       // --- SCP-typed policy: the regression guard ---
       // A broad intersection allow-list overflows a single 5,120-char SCP, so
@@ -201,6 +203,8 @@ async function expectPolicyDocumentValid(iam: IAMClient, policyArn: string): Pro
   expect(parsed.Version).toBe('2012-10-17');
   expect(Array.isArray(parsed.Statement)).toBe(true);
   expect(parsed.Statement.length).toBeGreaterThan(0);
+  // Generated policies only ever restrict.
+  expect(parsed.Statement.every((s: { Effect: string }) => s.Effect === 'Deny')).toBe(true);
   // Each managed policy document must fit IAM's 6,144-char limit.
   expect(decoded.length).toBeLessThanOrEqual(6144);
 }
