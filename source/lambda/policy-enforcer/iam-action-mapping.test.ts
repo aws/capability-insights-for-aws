@@ -70,3 +70,26 @@ describe('IAM_SERVICE_PREFIX_OVERRIDES', () => {
     expect(IAM_SERVICE_PREFIX_OVERRIDES.elasticloadbalancingv2).toBe('elasticloadbalancing');
   });
 });
+
+describe("toIamServicePrefix — SDKs that authorize under another service's prefix", () => {
+  // [sdkServiceName, the CLI-reference slug in its homepage, the IAM prefix it authorizes under]
+  it.each([
+    ['Chime SDK Meetings', 'meetings-chime', 'chime'],
+    ['Chime SDK Identity', 'identity-chime', 'chime'],
+    ['Chime SDK Messaging', 'messaging-chime', 'chime'],
+    ['Chime SDK Voice', 'voice-chime', 'chime'],
+    ['Chime SDK Media Pipelines', 'media-pipelines-chime', 'chime'],
+    ['Bedrock AgentCore Control', 'bedrock-agentcore-control', 'bedrock-agentcore'],
+    ['Agent Registry Control', 'agent-registry-control', 'agent-registry'],
+    ['MigrationHub Config', 'migrationhub-config', 'mgh'],
+    ['Personalize Events', 'personalize-events', 'personalize'],
+    ['Personalize Runtime', 'personalize-runtime', 'personalize'],
+    ['MediaStore Data', 'data.mediastore', 'mediastore'],
+    ['Pinpoint SMS Voice', 'sms-voice.pinpoint', 'sms-voice'],
+    ['Connect Contact Lens', 'contact-lens', 'connect'],
+    ['Signer Data', 'data-signer', 'signer'],
+  ])('%s authorizes under %s → %s', (sdkServiceName, slug, prefix) => {
+    const homepage = `https://awscli.amazonaws.com/v2/documentation/api/latest/reference/${slug}/x.html`;
+    expect(toIamServicePrefix(sdkServiceName, homepage)).toBe(prefix);
+  });
+});

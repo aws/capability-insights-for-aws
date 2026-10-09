@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router';
+import { useParams, useNavigate, useSearchParams } from 'react-router';
 import ContentLayout from '@cloudscape-design/components/content-layout';
 import Header from '@cloudscape-design/components/header';
 import Container from '@cloudscape-design/components/container';
@@ -14,10 +14,16 @@ import Table from '@cloudscape-design/components/table';
 import Input from '@cloudscape-design/components/input';
 import Pagination from '@cloudscape-design/components/pagination';
 import Tabs from '@cloudscape-design/components/tabs';
+import SegmentedControl from '@cloudscape-design/components/segmented-control';
+import CopyToClipboard from '@cloudscape-design/components/copy-to-clipboard';
 import { capabilityInsightsClient } from '~/clients/capability-insights-client';
 import { formatTimestamp } from '~/utils/time-utils';
+import { downloadBlob } from '~/utils/export-utils';
 import type { PolicyConfiguration } from '@capability-insights/shared/types/policy-enforcer/policy-configuration';
-import type { PreviewResponse } from '@capability-insights/shared/types/policy-enforcer/policy-api';
+import type {
+  AllowTemplateResponse,
+  PreviewResponse,
+} from '@capability-insights/shared/types/policy-enforcer/policy-api';
 
 import type { RouteHandle } from '~/types/route';
 
@@ -77,7 +83,7 @@ function generateCdkSnippet(arns: string[], policyName: string, policyType: stri
     const id = arns.length > 1 ? `${policyName}-Part${i + 1}` : policyName;
     return `role.addManagedPolicy(\n  iam.ManagedPolicy.fromManagedPolicyArn(this, '${id}', '${arn}'),\n);`;
   });
-  return lines.join('\n\n');
+  return `// Deny-only: keep the role's own permission policies attached as well.\n${lines.join('\n\n')}`;
 }
 
 function generateCfnSnippet(arns: string[], policyType: string): string {
@@ -86,7 +92,7 @@ function generateCfnSnippet(arns: string[], policyType: string): string {
     return `Type: AWS::Organizations::Policy\nProperties:\n  Type: SERVICE_CONTROL_POLICY\n  TargetIds:\n    - "ou-xxxx-xxxxxxxx"  # Replace with your OU ID\n  Content: !Sub |\n    # Policy content is managed by Capability Insights\n  ManagedPolicyArns:\n${entries}`;
   }
   const entries = arns.map(arn => `      - "${arn}"`).join('\n');
-  return `Type: AWS::IAM::Role\nProperties:\n  ManagedPolicyArns:\n${entries}`;
+  return `Type: AWS::IAM::Role\nProperties:\n  ManagedPolicyArns:\n      # Deny-only: keep the role's own permission policies here as well.\n${entries}`;
 }
 
 const PAGE_SIZE = 25;
@@ -144,6 +150,84 @@ function ActionsTable({ actions }: { actions: string[] }) {
   );
 }
 
+function AllowTemplatePanel({
+  policyName,
+  template,
+  loading,
+  error,
+}: {
+  policyName: string;
+  template: AllowTemplateResponse | null;
+  loading: boolean;
+  error: string;
+}) {
+  // The clipboard API needs a secure context; the S3 website endpoint serves plain HTTP.
+  const canCopy = typeof window !== 'undefined' && window.isSecureContext;
+  return (
+    <Container
+      header={
+        <Header
+          variant="h2"
+          description="Allow statements for every service available in the selected regions. Each part fits one managed policy."
+        >
+          Allow starter template
+        </Header>
+      }
+    >
+      <SpaceBetween size="m">
+        <Alert type="warning" header="A starting point to trim, not a guardrail">
+          Each entry allows a whole service (<code>service:*</code>) that has at least one action available in the
+          selected regions, IAM included. Within those services it also allows the actions that aren&apos;t available,
+          so pair it with an SCP from this tool or with this policy&apos;s Deny managed policies, either of which blocks
+          them. Download (or copy) the parts, remove the services your workloads don&apos;t need, and create the result
+          as your own policies. Capability Insights doesn&apos;t create, attach, or refresh this template.
+        </Alert>
+        {loading && <StatusIndicator type="loading">Generating template</StatusIndicator>}
+        {error && <Alert type="error">{error}</Alert>}
+        {template?.documents.map((doc, i) => {
+          const json = JSON.stringify(doc, null, 2);
+          const fileName = `${policyName}-allow-template${template.documents.length > 1 ? `-part${i + 1}` : ''}.json`;
+          return (
+            <Container
+              key={i}
+              header={
+                <Header
+                  variant="h3"
+                  actions={
+                    <SpaceBetween size="xs" direction="horizontal">
+                      <CopyToClipboard
+                        variant="button"
+                        textToCopy={json}
+                        disabled={!canCopy}
+                        disabledReason="Copying needs HTTPS. Use Download, or select the text below."
+                        copyButtonText="Copy"
+                        copyButtonAriaLabel={`Copy part ${i + 1}`}
+                        copySuccessText="Copied"
+                        copyErrorText="Copy failed"
+                      />
+                      <Button
+                        iconName="download"
+                        ariaLabel={`Download part ${i + 1}`}
+                        onClick={() => downloadBlob(json, fileName, 'application/json')}
+                      >
+                        Download
+                      </Button>
+                    </SpaceBetween>
+                  }
+                >
+                  Part {i + 1}
+                </Header>
+              }
+            >
+              <pre>{json}</pre>
+            </Container>
+          );
+        })}
+      </SpaceBetween>
+    </Container>
+  );
+}
+
 export default function PolicyEnforcerDetail() {
   const { policyName } = useParams<{ policyName: string }>();
   const navigate = useNavigate();
@@ -155,6 +239,12 @@ export default function PolicyEnforcerDetail() {
   const [deleting, setDeleting] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [error, setError] = useState('');
+  // `?view=allow` opens the Allow starter template, e.g. straight after creating the policy with it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const iamView: 'deny' | 'allow' = searchParams.get('view') === 'allow' ? 'allow' : 'deny';
+  const [template, setTemplate] = useState<AllowTemplateResponse | null>(null);
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const [templateError, setTemplateError] = useState('');
 
   const fetchData = useCallback(async () => {
     if (!policyName) return;
@@ -177,11 +267,30 @@ export default function PolicyEnforcerDetail() {
     void fetchData();
   }, [fetchData]);
 
+  const policyType = policy?.policyType;
+  useEffect(() => {
+    if (iamView !== 'allow' || policyType !== 'IAM' || !policyName || template || templateLoading || templateError) {
+      return;
+    }
+    setTemplateLoading(true);
+    capabilityInsightsClient
+      .getAllowTemplate(policyName)
+      .then(setTemplate, (e: unknown) => setTemplateError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setTemplateLoading(false));
+  }, [iamView, policyType, policyName, template, templateLoading, templateError]);
+
+  const handleIamViewChange = (view: 'deny' | 'allow') => {
+    if (view === 'allow') setTemplateError('');
+    setSearchParams(view === 'allow' ? { view: 'allow' } : {}, { replace: true, preventScrollReset: true });
+  };
+
   const handleRefresh = async () => {
     if (!policyName) return;
     setRefreshing(true);
     try {
       await capabilityInsightsClient.refreshPolicy(policyName);
+      setTemplate(null);
+      setTemplateError('');
       await fetchData();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -288,22 +397,31 @@ export default function PolicyEnforcerDetail() {
               <Box>{policy.lastRefreshOutcome ?? '—'}</Box>
             </Box>
             <Box>
-              <Box variant="awsui-key-label">Action count</Box>
+              <Box variant="awsui-key-label">Available actions</Box>
               <Box>{policy.lastActionCount ?? '—'}</Box>
             </Box>
           </SpaceBetween>
         </Container>
 
         {preview && (
-          <Container header={<Header variant="h2">Allow-list preview</Header>}>
+          <Container
+            header={
+              <Header
+                variant="h2"
+                description="Catalog actions available in the selected regions. The generated policy denies the unavailable ones and does not grant these."
+              >
+                Availability preview
+              </Header>
+            }
+          >
             <SpaceBetween size="m">
               <ColumnLayout columns={4}>
                 <Box>
-                  <Box variant="awsui-key-label">Allowed actions</Box>
+                  <Box variant="awsui-key-label">Available actions</Box>
                   <Box>{preview.actionCount}</Box>
                 </Box>
                 <Box>
-                  <Box variant="awsui-key-label">Excluded by region</Box>
+                  <Box variant="awsui-key-label">Unavailable actions</Box>
                   <Box>{preview.excludedCount}</Box>
                 </Box>
                 <Box>
@@ -320,13 +438,48 @@ export default function PolicyEnforcerDetail() {
           </Container>
         )}
 
-        {allArns.length > 0 && (
+        {policy.policyType === 'IAM' && (
+          <SegmentedControl
+            label="Policy view"
+            selectedId={iamView}
+            onChange={({ detail }) => handleIamViewChange(detail.selectedId as 'deny' | 'allow')}
+            options={[
+              { id: 'deny', text: 'Deny (managed policies)' },
+              { id: 'allow', text: 'Allow (starter template)' },
+            ]}
+          />
+        )}
+
+        {policy.policyType === 'IAM' && iamView === 'allow' && (
+          <AllowTemplatePanel
+            policyName={policy.policyName}
+            template={template}
+            loading={templateLoading}
+            error={templateError}
+          />
+        )}
+
+        {allArns.length > 0 && (policy.policyType !== 'IAM' || iamView === 'deny') && (
           <Container header={<Header variant="h2">Policy ARNs</Header>}>
             <SpaceBetween size="m">
               <Alert type="info" header="Attach this policy to apply governance">
-                Capability Insights creates the managed policy but does not attach it to any role or organization unit.
-                Use the snippets below to attach all {allArns.length} part{allArns.length > 1 ? 's' : ''} to the
-                workloads you want governed. Refreshing the policy updates in place — no need to re-attach.
+                {policy.policyType === 'SCP' ? (
+                  <>
+                    Capability Insights stores each SCP document as a managed policy but does not create or attach SCPs.
+                    Every statement is a Deny. Copy each of the {allArns.length} part{allArns.length > 1 ? 's' : ''}{' '}
+                    into an SCP in AWS Organizations and attach it to the OU or account. Refreshes, including the weekly
+                    schedule, update the documents here, not your SCPs: re-copy every part after a refresh.
+                  </>
+                ) : (
+                  <>
+                    Capability Insights creates the managed policies but does not attach them to any role. Every
+                    statement is a Deny, so they grant no permissions: they only restrict what the workloads&apos; own
+                    permission policies allow. Use the snippets below to attach all {allArns.length} part
+                    {allArns.length > 1 ? 's' : ''} to the workloads you want governed. A refresh updates the parts in
+                    place but can add or remove parts: after a refresh, attach every part listed below, and detach and
+                    delete any PolicyEnforcer-{policy.policyName}-Part&lt;N&gt; that is no longer listed.
+                  </>
+                )}
               </Alert>
               {allArns.map((arn, i) => (
                 <Container key={arn} header={<Header variant="h3">Part {i + 1}</Header>}>

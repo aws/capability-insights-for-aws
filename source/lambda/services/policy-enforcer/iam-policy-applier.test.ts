@@ -110,6 +110,37 @@ describe('IamPolicyApplier.apply', () => {
     expect(actions).toEqual(['update', 'create']);
   });
 
+  it('overwrites orphan parts with a Deny-only document before deleting them', async () => {
+    // The previous refresh produced 3 parts; this one produces 1. Parts 2 and 3
+    // are orphans. An attached orphan can't be deleted, so it must not keep its
+    // old content.
+    scriptResponses([
+      { success: true }, // update arn:p1 with the new document
+      { success: true }, // overwrite orphan arn:p2
+      { success: false, error: 'DeleteConflict' }, // delete arn:p2 fails — still attached
+      { success: true }, // overwrite orphan arn:p3
+      { success: true }, // delete arn:p3
+    ]);
+
+    const applier = new IamPolicyApplier(HELPER);
+    const result = await applier.apply('test', undefined, generated(1), ['arn:p1', 'arn:p2', 'arn:p3']);
+
+    expect(result.policyArn).toBe('arn:p1');
+    expect(result.additionalPolicyArns).toEqual([]);
+    const calls = lambdaMock.commandCalls(InvokeCommand);
+    const payloads = calls.map(c => JSON.parse(Buffer.from(c.args[0].input.Payload as Uint8Array).toString()));
+    expect(payloads.map(p => [p.action, p.policyArn])).toEqual([
+      ['update', 'arn:p1'],
+      ['update', 'arn:p2'],
+      ['delete', 'arn:p2'],
+      ['update', 'arn:p3'],
+      ['delete', 'arn:p3'],
+    ]);
+    // Each orphan receives one of this run's documents, never its old content.
+    expect(JSON.parse(payloads[1].policyDocument)).toEqual(generated(1).documents[0]);
+    expect(JSON.parse(payloads[3].policyDocument)).toEqual(generated(1).documents[0]);
+  });
+
   it('swallows rollback delete failures and still surfaces the original error', async () => {
     scriptResponses([
       { success: true, policyArn: 'arn:p1' },

@@ -48,6 +48,7 @@ export default function PolicyEnforcerCreate() {
   const [selectedRegions, setSelectedRegions] = useState<MultiselectProps.Option[]>([]);
 
   const [policyType, setPolicyType] = useState<'IAM' | 'SCP'>('IAM');
+  const [iamVersion, setIamVersion] = useState<'deny' | 'allow'>('deny');
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -127,7 +128,8 @@ export default function PolicyEnforcerCreate() {
         mode: 'intersection',
         policyType,
       });
-      void navigate(`/policy-enforcer/${encodeURIComponent(policyName.trim())}`);
+      const view = policyType === 'IAM' && iamVersion === 'allow' ? '?view=allow' : '';
+      void navigate(`/policy-enforcer/${encodeURIComponent(policyName.trim())}${view}`);
     } catch (e) {
       if (e instanceof PolicyNameConflictError) {
         setSubmitError(e.message);
@@ -248,28 +250,53 @@ export default function PolicyEnforcerCreate() {
           },
           {
             title: 'Type',
-            description: 'IAM Managed Policy or SCP.',
+            description: 'IAM customer managed policy or SCP.',
             content: (
               <Container>
-                <FormField label="Policy type">
-                  <RadioGroup
-                    value={policyType}
-                    onChange={({ detail }) => setPolicyType(detail.value as 'IAM' | 'SCP')}
-                    items={[
-                      {
-                        value: 'IAM',
-                        label: 'IAM Managed Policy',
-                        description:
-                          'Attach to roles. Can be split into multiple policies if the document exceeds 6,144 chars.',
-                      },
-                      {
-                        value: 'SCP',
-                        label: 'Service Control Policy',
-                        description: 'Attach to an OU to restrict every account in the OU. Limit 5,120 chars (1 SCP).',
-                      },
-                    ]}
-                  />
-                </FormField>
+                <SpaceBetween size="l">
+                  <FormField label="Policy type">
+                    <RadioGroup
+                      value={policyType}
+                      onChange={({ detail }) => setPolicyType(detail.value as 'IAM' | 'SCP')}
+                      items={[
+                        {
+                          value: 'IAM',
+                          label: 'IAM Customer Managed Policy',
+                          description:
+                            "Deny-only: grants no permissions; it only blocks what isn't available in the selected regions. Can be split into multiple policies if the document exceeds 6,144 chars.",
+                        },
+                        {
+                          value: 'SCP',
+                          label: 'Service Control Policy',
+                          description:
+                            'Attach to an OU to restrict every account in the OU. May be split into up to 5 SCP documents of 5,120 chars each; attach every part.',
+                        },
+                      ]}
+                    />
+                  </FormField>
+                  {policyType === 'IAM' && (
+                    <FormField label="IAM policy version">
+                      <RadioGroup
+                        value={iamVersion}
+                        onChange={({ detail }) => setIamVersion(detail.value as 'deny' | 'allow')}
+                        items={[
+                          {
+                            value: 'deny',
+                            label: 'Deny (managed policies)',
+                            description:
+                              "Grants no permissions. It only blocks the capabilities that aren't available in the selected regions, so roles still need their own policies to allow anything.",
+                          },
+                          {
+                            value: 'allow',
+                            label: 'Allow (starter template)',
+                            description:
+                              'Allow statements for every service available in the selected regions, to download, trim, and create as your own policies — typically under an SCP from this tool. The policy page opens on this template. The Deny managed policies are created too: attach them alongside your trimmed copy unless an SCP from this tool already covers the account.',
+                          },
+                        ]}
+                      />
+                    </FormField>
+                  )}
+                </SpaceBetween>
               </Container>
             ),
           },
@@ -301,6 +328,12 @@ export default function PolicyEnforcerCreate() {
                       <Box variant="awsui-key-label">Type</Box>
                       <Box>{policyType}</Box>
                     </Box>
+                    {policyType === 'IAM' && (
+                      <Box>
+                        <Box variant="awsui-key-label">IAM policy version</Box>
+                        <Box>{iamVersion === 'allow' ? 'Allow (starter template)' : 'Deny (managed policies)'}</Box>
+                      </Box>
+                    )}
                   </SpaceBetween>
                 </Container>
               </SpaceBetween>

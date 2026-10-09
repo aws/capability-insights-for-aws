@@ -104,10 +104,28 @@ export class IamPolicyApplier {
     }
 
     // Delete orphan policies if this refresh has fewer parts than the previous one.
+    // IAM refuses to delete a policy that is still attached, and an orphan that
+    // survives would keep whatever it last contained, so first overwrite it with
+    // a document from this set. Every generated document is Deny-only, so the
+    // duplicate changes nothing.
+    const lastDocument = generated.documents[generated.documents.length - 1];
     for (let i = generated.documents.length; i < existingArns.length; i++) {
+      if (lastDocument) {
+        const overwritten = await this.invoke({
+          action: 'update',
+          policyArn: existingArns[i],
+          policyDocument: JSON.stringify(lastDocument),
+        });
+        if (!overwritten.success) {
+          logger.warn('Failed to overwrite orphan policy before deleting it', {
+            policyArn: existingArns[i],
+            error: overwritten.error,
+          });
+        }
+      }
       const result = await this.invoke({ action: 'delete', policyArn: existingArns[i] });
       if (!result.success) {
-        logger.warn('Failed to delete orphan policy; leaving for next refresh', {
+        logger.warn('Failed to delete orphan policy (is it still attached?); leaving it in place', {
           policyArn: existingArns[i],
           error: result.error,
         });

@@ -4,7 +4,11 @@ import { StatusCode } from '../constants/status-codes';
 import { ErrorResponse } from '../constants/errors';
 import { EnvironmentKey, getEnv, getOptionalEnv } from '../constants/environment';
 import { CatalogKey } from '../constants/data-paths';
-import { PolicyStatus, RefreshOutcome } from '@capability-insights/shared/types/policy-enforcer/policy-enums';
+import {
+  PolicyStatus,
+  PolicyType,
+  RefreshOutcome,
+} from '@capability-insights/shared/types/policy-enforcer/policy-enums';
 import { logger } from '../util/logger';
 import { S3BucketClient } from '../services/s3-client';
 import {
@@ -13,7 +17,7 @@ import {
   PolicyNotFoundError,
 } from '../services/policy-enforcer/policy-config-store';
 import { computeAllowList } from '../policy-enforcer/allow-list-engine';
-import { generatePolicyDocument } from '../policy-enforcer/policy-document-generator';
+import { generateAllowTemplate, generatePolicyDocument } from '../policy-enforcer/policy-document-generator';
 import { validatePolicyConfiguration, validatePolicyUpdate } from '../policy-enforcer/validation';
 import { IamPolicyApplier } from '../services/policy-enforcer/iam-policy-applier';
 import { refreshPolicy, PolicyTooLargeError } from '../services/policy-enforcer/policy-refresher';
@@ -23,6 +27,7 @@ import type {
   UpdatePolicyRequest,
   ListPoliciesQuery,
   PreviewResponse,
+  AllowTemplateResponse,
 } from '@capability-insights/shared/types/policy-enforcer/policy-api';
 import type { PolicyConfiguration } from '@capability-insights/shared/types/policy-enforcer/policy-configuration';
 import type { ApiService } from '@capability-insights/shared/types/capability/api';
@@ -350,6 +355,42 @@ export async function previewPolicyRoute(
   };
 
   return ok(preview);
+}
+
+/**
+ * GET /policies/:policyName/allow-template — the Allow starter template for an
+ * IAM-type policy, computed from the current catalog. Display only: nothing is
+ * created, attached, or stored.
+ */
+export async function allowTemplateRoute(
+  event: APIGatewayProxyEvent,
+  params: Record<string, string>,
+): Promise<APIGatewayProxyResult> {
+  const store = getStore(event.requestContext.accountId);
+  const policy = await store.getPolicy(params.policyName);
+  if (!policy) return ErrorResponse.notFound(`Policy ${params.policyName} not found`);
+  if (policy.policyType !== PolicyType.IAM) {
+    return ErrorResponse.badRequest('The Allow starter template is available for IAM-type policies only');
+  }
+
+  let catalogData: ApiService[];
+  try {
+    catalogData = await loadCatalog();
+  } catch (error: unknown) {
+    logger.error('Catalog unavailable during allow template', { policyName: params.policyName, error: String(error) });
+    return ErrorResponse.serviceUnavailable('Catalog data is temporarily unavailable');
+  }
+
+  const template = generateAllowTemplate({
+    catalogData,
+    configuration: policy,
+    policyName: policy.policyName,
+    generationTimestamp: new Date().toISOString(),
+  });
+  if (template.error) return ErrorResponse.badRequest(template.error);
+
+  const response: AllowTemplateResponse = { documents: template.documents, totalSize: template.totalSize };
+  return ok(response);
 }
 
 /**
