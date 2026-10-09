@@ -45,10 +45,37 @@ const actionsFor = (result: ReturnType<typeof generatePolicyDocument>, effect: '
     .filter(s => s.Effect === effect)
     .flatMap(s => s.Action ?? []);
 
-describe('generatePolicyDocument — IAM (allow-list)', () => {
-  it('produces a single Allow document for a small allow-list', () => {
+/** The `NotAction` list of the (single) whitelist statement, if there is one. */
+const whitelistFor = (result: ReturnType<typeof generatePolicyDocument>): string[] | undefined =>
+  result.documents.flatMap(d => d.Statement).find(s => s.NotAction !== undefined)?.NotAction;
+
+/** A catalog whose whitelist is too large for one IAM document: forces the deny-list fallback. */
+const mixedLargeCatalog = (): ApiService[] => {
+  const services: ApiService[] = [];
+  for (let i = 0; i < 600; i++) services.push(buildService(`avail${i}`, [{ name: 'A', available: true }]));
+  for (let i = 0; i < 1500; i++) services.push(buildService(`gone${i}`, [{ name: 'A', available: false }]));
+  return services;
+};
+
+/** Applies the documents' Deny statements to `action` (Deny Action / Deny NotAction semantics). */
+const isDenied = (result: ReturnType<typeof generatePolicyDocument>, action: string): boolean => {
+  const matches = (entry: string) =>
+    entry === action || (entry.endsWith(':*') && action.startsWith(entry.slice(0, -1)));
+  return result.documents
+    .flatMap(d => d.Statement)
+    .some(
+      s =>
+        s.Effect === 'Deny' && (s.Action?.some(matches) || (s.NotAction !== undefined && !s.NotAction.some(matches))),
+    );
+};
+
+describe('generatePolicyDocument — IAM (deny-list)', () => {
+  it('denies a fully-unavailable service with a service wildcard', () => {
     const result = generatePolicyDocument({
-      catalogData: [buildService('s3', [{ name: 'GetObject', available: true }])],
+      catalogData: [
+        buildService('s3', [{ name: 'GetObject', available: true }]),
+        buildService('unavailableservice', [{ name: 'OnlyAction', available: false }]),
+      ],
       configuration: config(),
       policyName: 'Test',
       generationTimestamp: TS,
@@ -58,15 +85,21 @@ describe('generatePolicyDocument — IAM (allow-list)', () => {
     expect(result.documents).toHaveLength(1);
     const stmt = result.documents[0].Statement[0];
     expect(result.documents[0].Version).toBe('2012-10-17');
-    expect(stmt.Effect).toBe('Allow');
+    expect(stmt.Effect).toBe('Deny');
     expect(stmt.Resource).toBe('*');
-    expect(stmt.Action).toEqual(['s3:*']);
-    expect(stmt.Sid).toMatch(/^PolicyEnforcerAllow/);
+    expect(stmt.Action).toEqual(['unavailableservice:*']);
+    expect(stmt.NotAction).toBeUndefined();
+    expect(stmt.Sid).toMatch(/^PolicyEnforcerDeny/);
+    expect(result.blanketDenyServiceCount).toBe(1);
+    expect(result.fullyAvailableServiceCount).toBe(1);
   });
 
   it('embeds the sanitized generation timestamp in the Sid', () => {
     const result = generatePolicyDocument({
-      catalogData: [buildService('s3', [{ name: 'GetObject', available: true }])],
+      catalogData: [
+        buildService('s3', [{ name: 'GetObject', available: false }]),
+        buildService('ec2', [{ name: 'A', available: true }]),
+      ],
       configuration: config(),
       policyName: 'Test',
       generationTimestamp: TS,
@@ -74,7 +107,7 @@ describe('generatePolicyDocument — IAM (allow-list)', () => {
     expect(result.documents[0].Statement[0].Sid).toContain('20260603T150000Z');
   });
 
-  it('Strategy A: allow service:* + Deny the unavailable actions when most APIs are available', () => {
+  it('denies only the unavailable actions of a mostly-available service', () => {
     const apis = Array.from({ length: 20 }, (_, i) => ({ name: `Action${i}`, available: true }));
     apis.push({ name: 'UnavailableAction', available: false });
 
@@ -85,14 +118,10 @@ describe('generatePolicyDocument — IAM (allow-list)', () => {
       generationTimestamp: TS,
     });
 
-    expect(actionsFor(result, 'Allow')).toEqual(['s3:*']);
     expect(actionsFor(result, 'Deny')).toEqual(['s3:UnavailableAction']);
-    // The Deny is a distinct statement so it narrows the s3:* allow.
-    const denyStmt = result.documents.flatMap(d => d.Statement).find(s => s.Effect === 'Deny');
-    expect(denyStmt?.Sid).toMatch(/^PolicyEnforcerDeny/);
   });
 
-  it('Strategy B: list the available actions when most APIs are unavailable', () => {
+  it('denies the unavailable actions of a mostly-unavailable service, not the whole service', () => {
     const apis = [
       { name: 'AvailA', available: true },
       { name: 'AvailB', available: true },
@@ -105,23 +134,107 @@ describe('generatePolicyDocument — IAM (allow-list)', () => {
       generationTimestamp: TS,
     });
 
-    expect(actionsFor(result, 'Allow')).toEqual(['s3:AvailA', 's3:AvailB']);
-    expect(actionsFor(result, 'Deny')).toEqual([]); // nothing to narrow
+    const denied = actionsFor(result, 'Deny');
+    expect(denied).toHaveLength(20);
+    expect(denied).not.toContain('s3:*');
+    expect(isDenied(result, 's3:AvailA')).toBe(false);
   });
 
-  it('omits fully-unavailable services from the allow-list (default-denied)', () => {
+  // Several catalog services can map to one IAM prefix (e.g. Lambda and Lambda
+  // Core). Availability is merged per prefix, so one unavailable service can't
+  // deny the actions another service with the same prefix makes available.
+  it('does not deny the whole prefix when another service with the same IAM prefix is available', () => {
     const result = generatePolicyDocument({
       catalogData: [
-        buildService('s3', [{ name: 'GetObject', available: true }]),
-        buildService('unavailableservice', [{ name: 'OnlyAction', available: false }]),
+        buildService('lambda', [{ name: 'Invoke', available: true }]),
+        buildService('lambda', [{ name: 'CoreOnly', available: false }]),
       ],
       configuration: config(),
       policyName: 'Test',
       generationTimestamp: TS,
     });
-    expect(actionsFor(result, 'Allow')).toEqual(['s3:*']);
-    expect(result.blanketDenyServiceCount).toBe(1);
-    expect(result.fullyAvailableServiceCount).toBe(1);
+
+    expect(actionsFor(result, 'Deny')).toEqual(['lambda:CoreOnly']);
+    expect(isDenied(result, 'lambda:Invoke')).toBe(false);
+  });
+
+  it('does not deny an action that another service with the same IAM prefix makes available', () => {
+    const result = generatePolicyDocument({
+      catalogData: [
+        buildService('wisdom', [
+          { name: 'Shared', available: false },
+          { name: 'OnlyHere', available: false },
+          { name: 'Other', available: true },
+        ]),
+        buildService('wisdom', [{ name: 'Shared', available: true }]),
+      ],
+      configuration: config(),
+      policyName: 'Test',
+      generationTimestamp: TS,
+    });
+
+    expect(actionsFor(result, 'Deny')).toEqual(['wisdom:OnlyHere']);
+    expect(isDenied(result, 'wisdom:Shared')).toBe(false);
+  });
+
+  it('does not deny services or actions that are missing from the catalog', () => {
+    const result = generatePolicyDocument({
+      catalogData: [
+        buildService('s3', [{ name: 'GetObject', available: true }]),
+        buildService('gone', [{ name: 'A', available: false }]),
+      ],
+      configuration: config(),
+      policyName: 'Test',
+      generationTimestamp: TS,
+    });
+
+    // e.g. IAM-only namespaces such as Session Manager's, which no catalog service models.
+    expect(isDenied(result, 'ssmmessages:CreateControlChannel')).toBe(false);
+    expect(isDenied(result, 's3:ListAllMyBuckets')).toBe(false);
+    expect(isDenied(result, 'gone:A')).toBe(true);
+  });
+
+  it('never denies a partially-modeled namespace such as execute-api wholesale', () => {
+    // The catalog models execute-api only through ApiGatewayManagementApi, but
+    // execute-api:Invoke (calling IAM-authorized APIs) works wherever API Gateway does.
+    const result = generatePolicyDocument({
+      catalogData: [
+        buildService('apigateway', [{ name: 'GetRestApis', available: true }]),
+        buildService('execute-api', [
+          { name: 'PostToConnection', available: false },
+          { name: 'GetConnection', available: false },
+        ]),
+      ],
+      configuration: config(),
+      policyName: 'Test',
+      generationTimestamp: TS,
+    });
+
+    expect(actionsFor(result, 'Deny')).toEqual(['execute-api:GetConnection', 'execute-api:PostToConnection']);
+    expect(isDenied(result, 'execute-api:Invoke')).toBe(false);
+  });
+
+  it('honours exceptions: an excepted action and a service-wide exception are not denied', () => {
+    const result = generatePolicyDocument({
+      catalogData: [
+        buildService('s3', [
+          { name: 'GetObject', available: true },
+          { name: 'PutObject', available: false },
+        ]),
+        buildService('ecr', [{ name: 'BatchGetImage', available: false }]),
+        buildService('gone', [{ name: 'A', available: false }]),
+      ],
+      configuration: config({
+        exceptions: [
+          { action: 's3:PutObject', addedAt: '2026-01-01T00:00:00Z' },
+          { action: 'ecr:*', addedAt: '2026-01-01T00:00:00Z' },
+        ],
+      }),
+      policyName: 'Test',
+      generationTimestamp: TS,
+    });
+
+    expect(actionsFor(result, 'Deny')).toEqual(['gone:*']);
   });
 
   it('errors when nothing is available in the selected region(s) (empty allow-list)', () => {
@@ -134,7 +247,19 @@ describe('generatePolicyDocument — IAM (allow-list)', () => {
     expect(result.error).toBeDefined();
     expect(result.error).toMatch(/No capabilities are available/i);
     // Critically, it does NOT silently emit a deny-everything policy.
-    expect(actionsFor(result, 'Allow')).toEqual([]);
+    expect(result.documents).toHaveLength(0);
+  });
+
+  it('errors instead of returning no documents when there is nothing to restrict', () => {
+    // An empty result would make the applier delete the policy's existing parts.
+    const result = generatePolicyDocument({
+      catalogData: [buildService('s3', [{ name: 'GetObject', available: true }])],
+      configuration: config(),
+      policyName: 'Test',
+      generationTimestamp: TS,
+    });
+    expect(result.error).toMatch(/nothing for this IAM policy to restrict/i);
+    expect(result.documents).toHaveLength(0);
   });
 
   it('counts fully / partially / fully-unavailable services separately', () => {
@@ -156,56 +281,61 @@ describe('generatePolicyDocument — IAM (allow-list)', () => {
     expect(result.blanketDenyServiceCount).toBe(1);
   });
 
-  it('marks splitRequired and keeps every document within the IAM size limit', () => {
-    const services: ApiService[] = [];
-    for (let i = 0; i < 1500; i++) {
-      services.push(buildService(`service${i}`, [{ name: 'Action', available: true }]));
-    }
+  // ── Regression for V2367423619 ─────────────────────────────────────────────
+  // The old generator expressed the allow-list as `Deny NotAction:[…]` and
+  // split it across documents. Attaching those documents together denies
+  // everything except the (empty) intersection of the NotAction chunks — i.e.
+  // deny-all. A split policy must instead UNION across documents.
+  it('splits a large deny-list within the IAM size limit, composing by UNION', () => {
     const result = generatePolicyDocument({
-      catalogData: services,
+      catalogData: mixedLargeCatalog(),
       configuration: config(),
       policyName: 'Test',
       generationTimestamp: TS,
     });
+
     expect(result.error).toBeUndefined();
     expect(result.splitRequired).toBe(true);
     expect(result.documents.length).toBeGreaterThan(1);
     for (const doc of result.documents) {
       expect(JSON.stringify(doc).length).toBeLessThanOrEqual(6144);
     }
+    for (const s of result.documents.flatMap(d => d.Statement)) {
+      expect(s.Effect).toBe('Deny');
+      expect(s.NotAction).toBeUndefined();
+    }
+    // The UNION of Deny actions across all documents is exactly the
+    // unavailable set — nothing lost to the split, nothing available denied.
+    const denyUnion = new Set(actionsFor(result, 'Deny'));
+    for (let i = 0; i < 1500; i++) expect(denyUnion.has(`gone${i}:*`)).toBe(true);
+    for (let i = 0; i < 600; i++) expect(denyUnion.has(`avail${i}:*`)).toBe(false);
+    expect(denyUnion.size).toBe(1500);
   });
 
-  // ── Regression for V2367423619 ─────────────────────────────────────────────
-  // The old generator expressed the allow-list as `Deny NotAction:[…]` and
-  // split it across documents. Attaching those documents together denies
-  // everything except the (empty) intersection of the NotAction chunks — i.e.
-  // deny-all. The allow-list must instead UNION across documents.
-  it('multi-document allow-list composes by UNION, never collapsing to deny-all', () => {
-    const N = 1500;
-    const services: ApiService[] = [];
-    for (let i = 0; i < N; i++) {
-      services.push(buildService(`service${i}`, [{ name: 'Action', available: true }]));
-    }
+  it('denies the unavailable actions of partially-available services in a split deny-list', () => {
     const result = generatePolicyDocument({
-      catalogData: services,
+      catalogData: [
+        ...mixedLargeCatalog(),
+        buildService('parta', [
+          ...Array.from({ length: 20 }, (_, i) => ({ name: `Ok${i}`, available: true })),
+          { name: 'Gone', available: false },
+        ]),
+        buildService('partb', [
+          { name: 'Ok', available: true },
+          ...Array.from({ length: 20 }, (_, i) => ({ name: `Gone${i}`, available: false })),
+        ]),
+      ],
       configuration: config(),
       policyName: 'Test',
       generationTimestamp: TS,
     });
 
-    expect(result.documents.length).toBeGreaterThan(1); // it split
-    // No document uses NotAction (the unsplittable, intersect-on-combine form).
-    for (const s of result.documents.flatMap(d => d.Statement)) {
-      expect((s as { NotAction?: unknown }).NotAction).toBeUndefined();
-      expect(s.Effect).toBe('Allow');
-    }
-    // The UNION of Allow actions across all documents equals the full
-    // allow-list — nothing lost to the split.
-    const allowUnion = new Set(actionsFor(result, 'Allow'));
-    for (let i = 0; i < N; i++) {
-      expect(allowUnion.has(`service${i}:*`)).toBe(true);
-    }
-    expect(allowUnion.size).toBe(N);
+    const denyUnion = new Set(actionsFor(result, 'Deny'));
+    expect(denyUnion.has('parta:Gone')).toBe(true);
+    for (let i = 0; i < 20; i++) expect(denyUnion.has(`partb:Gone${i}`)).toBe(true);
+    expect(denyUnion.has('partb:Ok')).toBe(false);
+    expect(denyUnion.has('parta:*')).toBe(false);
+    expect(denyUnion.has('partb:*')).toBe(false);
   });
 });
 
@@ -326,21 +456,60 @@ describe('generatePolicyDocument — invariants', () => {
       }
     }
   });
+
+  // Generated documents must only ever restrict.
+  it('never emits an Allow statement, and IAM never uses NotAction', () => {
+    const partial = [
+      buildService('s3', [
+        { name: 'A', available: true },
+        { name: 'B', available: false },
+      ]),
+    ];
+    const strategyA = [
+      buildService('s3', [
+        ...Array.from({ length: 20 }, (_, i) => ({ name: `Ok${i}`, available: true })),
+        { name: 'Gone', available: false },
+      ]),
+    ];
+    const lowAvail = [
+      buildService('s3', [{ name: 'A', available: true }]),
+      ...Array.from({ length: 100 }, (_, i) => buildService(`u${i}`, [{ name: 'A', available: false }])),
+    ];
+
+    let statements = 0;
+    for (const catalogData of [partial, strategyA, lowAvail, mixedLargeCatalog()]) {
+      for (const policyType of ['IAM', 'SCP'] as const) {
+        const r = generatePolicyDocument({
+          catalogData,
+          configuration: config({ policyType }),
+          policyName: 'T',
+          generationTimestamp: TS,
+        });
+        const stmts = r.documents.flatMap(d => d.Statement);
+        statements += stmts.length;
+        expect(stmts.every(s => s.Effect === 'Deny')).toBe(true);
+        if (policyType === 'IAM') expect(stmts.every(s => s.NotAction === undefined)).toBe(true);
+      }
+    }
+    expect(statements).toBeGreaterThan(0);
+  });
 });
 
 describe('generatePolicyDocument — exceptions', () => {
-  it('treats exception actions as available (their service is allowed)', () => {
+  it('treats exception actions as available (their service is whitelisted, not denied)', () => {
     const result = generatePolicyDocument({
       catalogData: [
         buildService('s3', [{ name: 'GetObject', available: true }]),
         buildService('thingthatdoesntexist', [{ name: 'DoSomething', available: false }]),
       ],
       configuration: config({
+        policyType: 'SCP',
         exceptions: [{ action: 'thingthatdoesntexist:DoSomething', addedAt: '2026-01-01T00:00:00Z' }],
       }),
       policyName: 'Test',
       generationTimestamp: TS,
     });
-    expect(actionsFor(result, 'Allow')).toContain('thingthatdoesntexist:*');
+    expect(whitelistFor(result)).toContain('thingthatdoesntexist:*');
+    expect(actionsFor(result, 'Deny')).not.toContain('thingthatdoesntexist:*');
   });
 });

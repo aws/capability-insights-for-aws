@@ -44,7 +44,7 @@ The solution deploys a static website, REST API, and Lambda functions into your 
 
 ![Usage Analysis architecture](docs/images/personalization-architecture.png)
 
-A separate opt-in stack adds regional governance: a REST API and Lambdas that generate IAM Managed Policies or Service Control Policies whose allow-lists reflect what's available in your chosen regions, derived from the same capability catalog the dashboard uses.
+A separate opt-in stack adds regional governance: a REST API and Lambdas that generate IAM Managed Policies or Service Control Policies that restrict workloads to what's available in your chosen regions, derived from the same capability catalog the dashboard uses.
 
 ![Policy Enforcer architecture](docs/images/policy-enforcer-architecture.png)
 
@@ -262,8 +262,8 @@ The "My stuff" toggle becomes usable once the first run finishes.
 
 The Policy Enforcer is an optional third stack
 (`template/policy-enforcer.template.json`, also in `build-assets.zip`) that
-generates IAM Managed Policies or Service Control Policies whose `NotAction`
-allow-list reflects the capabilities available in your chosen regions. The
+generates IAM Managed Policies or Service Control Policies that deny the
+capabilities not available in your chosen regions. The
 manual path:
 
 1. Deploy `CapabilityInsightsPolicyEnforcer` (params: `PrivateVpcId`,
@@ -408,7 +408,7 @@ Once created, the policy detail page shows the configuration, refresh status, a 
 
 ![Policy detail](docs/images/user-guide-policy-enforcer-detail.png)
 
-**Attaching the result is left to you**: for IAM-typed policies, attach `arn:...:policy/PolicyEnforcer-<name>` to the roles or users that should be governed; for SCP-typed policies, copy each document and attach it to the target OU or account in AWS Organizations.
+**Attaching the result is left to you**: for IAM-typed policies, attach every Policy ARN listed on the detail page to the roles or users that should be governed; for SCP-typed policies, copy each document and attach it to the target OU or account in AWS Organizations.
 
 To re-run every policy against a fresh catalog (e.g. after a daily DataFetch update introduces new APIs), use **Refresh all policies** on the Settings page. Individual policies also refresh whenever you re-save them.
 
@@ -492,11 +492,11 @@ Adds personalization. Deployed when you pass `--enable-usage-analysis` to `npm r
 
 ### Policy Enforcer Stack (opt-in)
 
-Adds regional governance. Deployed when you pass `--enable-policy-enforcer` to `npm run deploy`. Exposes a REST API for creating named policies that select target regions and a computation mode (intersection or union), then generates an IAM Managed Policy or Service Control Policy whose `NotAction` allow-list is the set of capabilities available in those regions. The system creates and refreshes the policy resource on demand; **attaching it to roles or OUs is left to you**.
+Adds regional governance. Deployed when you pass `--enable-policy-enforcer` to `npm run deploy`. Exposes a REST API for creating named policies that select target regions and a computation mode (intersection or union), then generates IAM Managed Policies or Service Control Policies that deny the capabilities not available in those regions. The system creates and refreshes the policy resource on demand; **attaching it to roles or OUs is left to you**.
 
-Refresh runs synchronously when you `POST /policies`, `PUT /policies/:id`, or `POST /policies/:id/refresh` — there is no background schedule. Catalog data only changes when the DataFetch Lambda runs, so re-computing on its own cadence has no benefit.
+Refresh runs synchronously when you `POST /policies`, `PUT /policies/:id`, or `POST /policies/:id/refresh`. Every policy is also refreshed weekly by an EventBridge schedule, and on demand from **Refresh all policies** on the Settings page.
 
-A generated allow-list can exceed AWS's per-document size limits. The feature handles this by splitting across multiple documents: IAM Managed Policies split at 6,144 characters each, and Service Control Policies split at 5,120 characters each across up to 5 documents (the AWS Organizations limit of 5 SCPs per target). Generation only fails when even 5 SCP documents cannot hold the allow-list — in which case, reduce scope (fewer regions, intersection mode) or use the IAM policy type.
+Every generated statement is a `Deny`, for both policy types. IAM Managed Policies list the unavailable actions in `Deny Action` statements, split across documents of up to 6,144 characters each; attach every part, and check that the role, user, or group has room for them under its managed-policy quota. Actions and services missing from the catalog are not denied, and a service the catalog lists as unavailable is denied as a whole (`service:*`). Service Control Policies prefer a single `Deny NotAction` document that lists the available capabilities and denies everything else; it is never split, because combining split `NotAction` documents would deny everything. When it doesn't fit in 5,120 characters, the SCP falls back to `Deny Action` statements across up to 5 documents (the AWS Organizations limit of 5 SCPs per target), and services missing from the catalog are not denied. SCP generation fails when even 5 documents cannot hold the deny-list — in which case, reduce scope (fewer regions, intersection mode) or use the IAM policy type. IAM generation fails when every capability in the catalog is available in the selected regions, since there is nothing to restrict.
 
 | Resource                       | Description                                                                                    |
 | ------------------------------ | ---------------------------------------------------------------------------------------------- |

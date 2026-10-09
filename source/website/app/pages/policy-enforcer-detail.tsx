@@ -326,7 +326,8 @@ export default function PolicyEnforcerDetail() {
               <Alert type="info" header="Attach this policy to apply governance">
                 Capability Insights creates the managed policy but does not attach it to any role or organization unit.
                 Use the snippets below to attach all {allArns.length} part{allArns.length > 1 ? 's' : ''} to the
-                workloads you want governed. Refreshing the policy updates in place — no need to re-attach.
+                workloads you want governed. A refresh updates existing parts in place but can add parts — after a
+                refresh, make sure every part listed below is attached.
               </Alert>
               {allArns.map((arn, i) => (
                 <Container key={arn} header={<Header variant="h3">Part {i + 1}</Header>}>

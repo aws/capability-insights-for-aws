@@ -34,7 +34,7 @@ export interface PolicyStatement {
   Effect: 'Allow' | 'Deny';
   Action?: string[];
   /**
-   * Used ONLY in a single, never-split SCP whitelist document. `Deny NotAction`
+   * Used ONLY in a single, never-split whitelist document. `Deny NotAction`
    * intersects when combined across documents, so it must never be bin-packed —
    * it is emitted as exactly one statement or not at all.
    */
@@ -49,16 +49,16 @@ export interface PolicyDocument {
 
 export interface GeneratedPolicy {
   /**
-   * One or more documents. All must be attached together — they are designed
-   * to COMPOSE correctly when combined:
-   *   - IAM (Allow-list): Allow statements union (a permitted action is allowed
-   *     by at least one document); Deny statements narrow partially-available
-   *     services. Splitting across documents is therefore safe.
-   *   - SCP (Deny-list): Deny statements union (an action is blocked if any
-   *     document denies it). Splitting is safe.
-   * NB: the allow-list is intentionally NOT expressed as `Deny`/`NotAction`,
-   * which cannot be split — combining two `Deny NotAction:[disjoint]` documents
-   * denies everything except their (empty) intersection, i.e. denies all.
+   * One or more documents. All must be attached together. Every statement is a
+   * `Deny`, so attaching them can only ever REMOVE permissions. The documents
+   * compose correctly when combined:
+   *   - IAM: `Deny Action` documents only, which union (an action is blocked
+   *     if any document denies it). Splitting is safe.
+   *   - SCP: at most one `Deny NotAction` whitelist (never split), plus
+   *     `Deny Action` documents, which union.
+   * NB: a whitelist is never bin-packed — combining two
+   * `Deny NotAction:[disjoint]` documents denies everything except their
+   * (empty) intersection, i.e. denies all.
    */
   documents: PolicyDocument[];
   /** Sum of `JSON.stringify(doc).length` across all documents. */
@@ -75,8 +75,9 @@ export interface GeneratedPolicy {
   partialDenyActionCount: number;
   /**
    * Set when generation cannot satisfy the constraints (e.g. an empty
-   * allow-list, or an SCP deny-list that would exceed the per-target SCP
-   * budget). Callers should surface this to the user as a 400.
+   * allow-list, an SCP deny-list that would exceed the per-target SCP budget,
+   * or an IAM policy with nothing to restrict). Callers should surface this to
+   * the user as a 400.
    */
   error?: string;
 }
@@ -247,19 +248,82 @@ function binPackActions(
 }
 
 /**
+ * IAM namespaces the catalog models only through a small data-plane SDK, while
+ * their key permissions are IAM-only and available wherever the parent service
+ * is: `execute-api:Invoke` (calling any IAM-authorized API Gateway API) and
+ * `neptune-db:connect`. The catalog derives `execute-api` from
+ * ApiGatewayManagementApi and `neptune-db` from neptunedata, and can list
+ * those SDKs as unavailable in Regions where API Gateway and Neptune work, so
+ * these namespaces are never denied wholesale — only their catalogued
+ * unavailable actions are listed.
+ */
+const PARTIALLY_MODELED_PREFIXES = new Set(['execute-api', 'neptune-db']);
+
+/**
+ * The IAM deny-list: every catalog action that is unavailable under the
+ * configured mode, merged per IAM service prefix. Several catalog services
+ * can map to one prefix (e.g. Lambda and Lambda Core), so an action is denied
+ * only if no service with that prefix makes it available, and the whole
+ * prefix (`prefix:*`) only if none of its actions are available. Exceptions
+ * count as available; a `prefix:*` exception exempts the whole prefix.
+ */
+function buildIamDenyEntries(
+  catalogData: ApiService[],
+  regions: string[],
+  mode: PolicyMode,
+  exceptions: ExceptionEntry[],
+): string[] {
+  const exceptionSet = new Set(exceptions.map(e => e.action));
+  const byPrefix = new Map<string, { available: Set<string>; unavailable: Set<string> }>();
+
+  for (const service of catalogData) {
+    for (const operation of service.apis) {
+      const prefix = toIamServicePrefix(service.sdkServiceName, operation.homepage);
+      const action = `${prefix}:${operation.apiAction}`;
+      const isAvailableByRegion =
+        mode === PolicyMode.INTERSECTION
+          ? regions.every(region => operation.regionalAvailability[region] === AvailabilityStatus.AVAILABLE)
+          : regions.some(region => operation.regionalAvailability[region] === AvailabilityStatus.AVAILABLE);
+
+      let entry = byPrefix.get(prefix);
+      if (!entry) {
+        entry = { available: new Set(), unavailable: new Set() };
+        byPrefix.set(prefix, entry);
+      }
+      (isAvailableByRegion || exceptionSet.has(action) ? entry.available : entry.unavailable).add(action);
+    }
+  }
+
+  const denyEntries: string[] = [];
+  for (const [prefix, { available, unavailable }] of byPrefix) {
+    if (exceptionSet.has(`${prefix}:*`)) continue;
+    if (available.size === 0 && !PARTIALLY_MODELED_PREFIXES.has(prefix)) {
+      denyEntries.push(`${prefix}:*`);
+      continue;
+    }
+    for (const action of unavailable) {
+      if (!available.has(action)) denyEntries.push(action);
+    }
+  }
+  return denyEntries.sort();
+}
+
+/**
  * Generates IAM/SCP policy documents that restrict access to the capabilities
  * available in the selected region(s).
  *
- * The representation is chosen so that documents COMPOSE correctly when split
- * (see `GeneratedPolicy.documents`):
+ * Every statement is a `Deny`, so attaching the documents can only remove
+ * permissions. The representation is chosen so that documents COMPOSE
+ * correctly when split (see `GeneratedPolicy.documents`):
  *
- *   IAM  → an ALLOW-LIST of the available actions (`Allow Action:[…]`). IAM is
- *          default-deny, so this permits exactly the available set (unknown /
- *          future actions are denied too). For partially-available services the
- *          cheaper of two encodings is used: list the available actions, or
- *          allow `service:*` and add a narrowing `Deny` for the unavailable
- *          ones. Allow and Deny both union across documents, so any size splits
- *          safely.
+ *   IAM  → a DENY-LIST of the unavailable actions (`Deny Action:[…]`), merged
+ *          per IAM service prefix (see `buildIamDenyEntries`). Never a
+ *          `NotAction` whitelist: a whitelist also denies everything the
+ *          catalog doesn't model — IAM-only namespaces such as `ssmmessages`
+ *          or `rds-db`, and services whose catalog-derived prefix differs from
+ *          the real one — overriding the principal's own grants. Actions absent
+ *          from the catalog are therefore not denied. Splits safely to any
+ *          size, so IAM documents are not capped.
  *
  *   SCP  → prefer a single strict `Deny NotAction:[available]` whitelist when it
  *          fits ONE document (it is never split, so it cannot intersect-to-
@@ -269,7 +333,7 @@ function binPackActions(
  *          across documents. If neither fits the per-target SCP budget, return
  *          an error rather than a broken policy. Trade-off: in the deny-list
  *          fallback, services absent from the catalog are allowed, whereas the
- *          whitelist and the IAM allow-list deny them.
+ *          whitelist denies them.
  */
 export function generatePolicyDocument(options: PolicyDocumentOptions): GeneratedPolicy {
   const { catalogData, configuration, generationTimestamp } = options;
@@ -281,15 +345,15 @@ export function generatePolicyDocument(options: PolicyDocumentOptions): Generate
   let fullyAvailableServiceCount = 0;
   let partiallyAvailableServiceCount = 0;
 
-  // Actions to ALLOW (IAM allow-list). Wildcards + specific actions.
+  // Actions the SCP whitelist exempts from its `Deny NotAction`. Wildcards +
+  // specific actions.
   const allowEntries: string[] = [];
-  // Specific unavailable actions to DENY (IAM: narrows a `service:*` allow;
-  // SCP: part of the deny-list).
+  // Specific unavailable actions to DENY (narrows a whitelisted `service:*`).
   const specificDenyActions: string[] = [];
   // Whole services that are fully unavailable — denied via `service:*`.
   const fullyUnavailableWildcards: string[] = [];
   // Every unavailable action of partially-available services (all strategies) —
-  // the SCP deny-list fallback denies these regardless of allow-encoding.
+  // the SCP deny-list fallback denies these regardless of whitelist encoding.
   const allUnavailableActions: string[] = [];
 
   const addedAllow = new Set<string>();
@@ -304,7 +368,7 @@ export function generatePolicyDocument(options: PolicyDocumentOptions): Generate
     }
 
     if (c.availableAPIs === c.totalAPIs) {
-      // Fully available — allow the whole service.
+      // Fully available — whitelist the whole service.
       const wildcard = `${c.iamPrefix}:*`;
       if (!addedAllow.has(wildcard)) {
         allowEntries.push(wildcard);
@@ -314,9 +378,9 @@ export function generatePolicyDocument(options: PolicyDocumentOptions): Generate
       continue;
     }
 
-    // Partially available — pick the cheaper allow encoding.
+    // Partially available — pick the cheaper whitelist encoding.
     const wildcard = `${c.iamPrefix}:*`;
-    // Strategy A: allow `service:*` and deny the unavailable actions.
+    // Strategy A: whitelist `service:*` and deny the unavailable actions.
     const strategyACost = wildcard.length + c.unavailableActions.reduce((sum, a) => sum + a.length + 3, 0);
     // Strategy B: list the available actions.
     const strategyBCost = c.availableActions.reduce((sum, a) => sum + a.length + 3, 0);
@@ -343,7 +407,6 @@ export function generatePolicyDocument(options: PolicyDocumentOptions): Generate
   const uniqueSpecificDeny = Array.from(new Set(specificDenyActions)).sort();
   const partialDenyActionCount = uniqueSpecificDeny.length;
 
-  const allowSid = `PolicyEnforcerAllow${sanitize(generationTimestamp)}`;
   const denySid = `PolicyEnforcerDeny${sanitize(generationTimestamp)}`;
 
   const baseMeta = {
@@ -353,27 +416,28 @@ export function generatePolicyDocument(options: PolicyDocumentOptions): Generate
     partialDenyActionCount,
   };
 
-  if (policyType === PolicyType.SCP) {
-    // Nothing available would make a `Deny NotAction:[]` whitelist deny
-    // everything — surface it as an error instead of a deny-all policy.
-    if (allowEntries.length === 0) {
-      return {
-        documents: [],
-        totalSize: 0,
-        splitRequired: false,
-        ...baseMeta,
-        error:
-          'No capabilities are available in the selected region(s), so the allow-list ' +
-          'is empty. Check that the region has capability data and is spelled correctly, ' +
-          'or select additional regions.',
-      };
-    }
+  // Nothing available would make a `Deny NotAction:[]` whitelist (or a
+  // deny-list of every service) deny everything — surface it as an error
+  // instead of a deny-all policy.
+  if (allowEntries.length === 0) {
+    return {
+      documents: [],
+      totalSize: 0,
+      splitRequired: false,
+      ...baseMeta,
+      error:
+        'No capabilities are available in the selected region(s), so the allow-list ' +
+        'is empty. Check that the region has capability data and is spelled correctly, ' +
+        'or select additional regions.',
+    };
+  }
 
+  if (policyType === PolicyType.SCP) {
     // Preferred: a single strict `Deny NotAction:[available]` whitelist. It is
     // ONE document (never split, so it cannot intersect-to-deny-all), and stays
     // compact when few services are available — the common case for a
-    // restricted region. Partially-available services allowed via `service:*`
-    // are narrowed by `Deny Action` documents, which union safely.
+    // restricted region. Partially-available services whitelisted via
+    // `service:*` are narrowed by `Deny Action` documents, which union safely.
     const whitelistSid = `PolicyEnforcerAllowList${sanitize(generationTimestamp)}`;
     const whitelistDoc = buildBlanketDenyDocument(allowEntries, whitelistSid);
     if (getDocumentSize(whitelistDoc) <= SCP_SIZE_LIMIT) {
@@ -414,24 +478,21 @@ export function generatePolicyDocument(options: PolicyDocumentOptions): Generate
     return { documents, totalSize, splitRequired: documents.length > 1, ...baseMeta };
   }
 
-  // IAM path: allow-list. IAM is default-deny, so an empty allow-list would
-  // grant nothing — surface that as an error rather than an empty policy.
-  if (allowEntries.length === 0) {
+  // IAM path: deny-list only.
+  const denyEntries = buildIamDenyEntries(catalogData, regions, mode, exceptions);
+  if (denyEntries.length === 0) {
+    // An empty set would make the applier delete the policy's existing parts.
     return {
       documents: [],
       totalSize: 0,
       splitRequired: false,
       ...baseMeta,
       error:
-        'No capabilities are available in the selected region(s), so the allow-list ' +
-        'is empty. Check that the region has capability data and is spelled correctly, ' +
-        'or select additional regions.',
+        'Every capability in the catalog is available in the selected region(s), so there is ' +
+        'nothing for this IAM policy to restrict.',
     };
   }
-
-  const allowDocs = binPackActions(allowEntries, 'Allow', allowSid, IAM_SIZE_LIMIT);
-  const denyDocs = binPackActions(uniqueSpecificDeny, 'Deny', denySid, IAM_SIZE_LIMIT);
-  const documents = [...allowDocs, ...denyDocs];
+  const documents = binPackActions(denyEntries, 'Deny', denySid, IAM_SIZE_LIMIT);
   const totalSize = documents.reduce((sum, doc) => sum + getDocumentSize(doc), 0);
 
   return { documents, totalSize, splitRequired: documents.length > 1, ...baseMeta };

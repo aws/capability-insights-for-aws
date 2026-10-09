@@ -11,7 +11,8 @@ import {
 import type { PolicyConfiguration } from '@capability-insights/shared/types/policy-enforcer/policy-configuration';
 import type { ApiService } from '@capability-insights/shared/types/capability/api';
 
-// Minimal catalog: one service, one API available in us-east-1.
+// Minimal catalog: one API available in us-east-1 and one that isn't, so an
+// IAM-type policy has something to restrict.
 const catalog: ApiService[] = [
   {
     sdkServiceName: 'S3',
@@ -22,6 +23,12 @@ const catalog: ApiService[] = [
         apiAction: 'GetObject',
         homepage: '',
         regionalAvailability: { 'us-east-1': 'Available' },
+      },
+      {
+        apiName: 'S3+SelectObjectContent',
+        apiAction: 'SelectObjectContent',
+        homepage: '',
+        regionalAvailability: {},
       },
     ],
   },
@@ -68,6 +75,15 @@ describe('refreshPolicy', () => {
     expect(applier.apply).toHaveBeenCalledOnce();
     expect(result.policyArn).toContain('PolicyEnforcer-');
     expect(result.actionCount).toBeGreaterThanOrEqual(0);
+  });
+
+  it('returns an empty additionalPolicyArns list (not undefined) for a single-part result', async () => {
+    // The store skips undefined fields, so undefined would leave previously
+    // deleted parts in the stored ARN list.
+    const applier = makeApplierStub();
+    const result = await refreshPolicy(makePolicy('p1'), catalog, applier);
+
+    expect(result.additionalPolicyArns).toEqual([]);
   });
 
   // Note: the PolicyTooLargeError path (generator returns `error`) is covered

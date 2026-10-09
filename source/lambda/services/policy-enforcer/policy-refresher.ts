@@ -59,7 +59,9 @@ export async function refreshPolicy(
   return {
     message: 'Policy refreshed',
     policyArn: applied.policyArn,
-    additionalPolicyArns: applied.additionalPolicyArns.length > 0 ? applied.additionalPolicyArns : undefined,
+    // Always an array (possibly empty): the store skips undefined fields, so
+    // returning undefined would leave deleted parts in the stored ARN list.
+    additionalPolicyArns: applied.additionalPolicyArns,
     actionCount: allowList.actionCount,
     splitRequired: generated.splitRequired,
     totalSize: generated.totalSize,

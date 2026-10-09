@@ -23,6 +23,22 @@ export const IAM_SERVICE_PREFIX_OVERRIDES: Record<string, string> = {
   // The catalog "elasticloadbalancingv2" sdkServiceName lives under the same
   // IAM prefix as classic ELB.
   elasticloadbalancingv2: 'elasticloadbalancing',
+  // These SDKs' CLI references use their own name, but they authorize under
+  // the IAM prefix they share with another catalog service.
+  'Chime SDK Meetings': 'chime',
+  'Chime SDK Identity': 'chime',
+  'Chime SDK Messaging': 'chime',
+  'Chime SDK Voice': 'chime',
+  'Chime SDK Media Pipelines': 'chime',
+  'Bedrock AgentCore Control': 'bedrock-agentcore',
+  'Agent Registry Control': 'agent-registry',
+  'MigrationHub Config': 'mgh',
+  'Personalize Events': 'personalize',
+  'Personalize Runtime': 'personalize',
+  'MediaStore Data': 'mediastore',
+  'Pinpoint SMS Voice': 'sms-voice',
+  'Connect Contact Lens': 'connect',
+  'Signer Data': 'signer',
   // Add more as we discover mismatches in the wild.
 };
 
