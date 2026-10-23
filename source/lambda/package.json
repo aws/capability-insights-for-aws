@@ -11,7 +11,7 @@
     "test:it": "vitest run --config vitest.it.config.ts"
   },
   "dependencies": {
-    "js-yaml": "4.1.1"
+    "js-yaml": "4.2.0"
   },
   "devDependencies": {
     "@aws-sdk/client-athena": "3.1040.0",
