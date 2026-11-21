@@ -83,6 +83,57 @@ Resources:
     expect(resources.MyBucket.Properties.BucketName).toBe('my-bucket');
   });
 
+  it('keeps `<<` as a plain key instead of applying a YAML merge', async () => {
+    // CloudFormation doesn't support hash merges, so the parser schema leaves
+    // merge handling out entirely (it's the source of several js-yaml CPU
+    // advisories). A `<<` key must survive as data, not be merged.
+    const yamlTemplate = `
+Resources:
+  MyBucket:
+    Type: AWS::S3::Bucket
+    Metadata:
+      <<:
+        Inherited: value
+`;
+    cfnMock.on(GetTemplateCommand).resolves({ TemplateBody: yamlTemplate });
+
+    const result = await getProcessedTemplate(new CloudFormationClient({}), 'stack-merge-key');
+
+    const resources = result?.Resources as Record<string, { Type: string; Metadata: unknown }>;
+    expect(resources.MyBucket.Type).toBe('AWS::S3::Bucket');
+    expect(resources.MyBucket.Metadata).toEqual({ '<<': { Inherited: 'value' } });
+  });
+
+  it('leaves unquoted dates as strings, matching JSON templates', async () => {
+    const yamlTemplate = `
+AWSTemplateFormatVersion: 2010-09-09
+Resources:
+  MyBucket:
+    Type: AWS::S3::Bucket
+`;
+    cfnMock.on(GetTemplateCommand).resolves({ TemplateBody: yamlTemplate });
+
+    const result = await getProcessedTemplate(new CloudFormationClient({}), 'stack-date');
+
+    expect(result?.AWSTemplateFormatVersion).toBe('2010-09-09');
+  });
+
+  it('returns null for YAML tags CloudFormation does not support (!!omap)', async () => {
+    const yamlTemplate = `
+Resources:
+  MyBucket:
+    Type: AWS::S3::Bucket
+    Metadata: !!omap
+      - a: 1
+      - b: 2
+`;
+    cfnMock.on(GetTemplateCommand).resolves({ TemplateBody: yamlTemplate });
+
+    const result = await getProcessedTemplate(new CloudFormationClient({}), 'stack-omap');
+
+    expect(result).toBeNull();
+  });
+
   it('returns null when TemplateBody is absent', async () => {
     cfnMock.on(GetTemplateCommand).resolves({});
 

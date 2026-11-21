@@ -7,7 +7,9 @@ import { PolicyStatus, RefreshOutcome } from '@capability-insights/shared/types/
 vi.mock('../services/s3-client', () => {
   const getObject = vi.fn();
   return {
-    S3BucketClient: vi.fn().mockImplementation(() => ({ getObject })),
+    S3BucketClient: vi.fn().mockImplementation(function () {
+      return { getObject };
+    }),
     __getObjectStub: getObject,
   };
 });
@@ -35,7 +37,9 @@ vi.mock('../services/policy-enforcer/policy-config-store', () => {
     deletePolicy: vi.fn(),
   };
   return {
-    PolicyConfigStore: vi.fn().mockImplementation(() => storeStub),
+    PolicyConfigStore: vi.fn().mockImplementation(function () {
+      return storeStub;
+    }),
     PolicyNameConflictError,
     PolicyNotFoundError,
     // Expose the singleton stub so tests can configure it after import.
@@ -49,7 +53,9 @@ vi.mock('../services/policy-enforcer/iam-policy-applier', () => {
     deleteAll: vi.fn(),
   };
   return {
-    IamPolicyApplier: vi.fn().mockImplementation(() => applierStub),
+    IamPolicyApplier: vi.fn().mockImplementation(function () {
+      return applierStub;
+    }),
     __applierStub: applierStub,
   };
 });
