@@ -20,6 +20,15 @@ import { logger } from '../util/logger';
  * canonical long form is `{ Ref: data }` (not `{ Fn::Ref: data }`); we
  * normalize it to the prefixed form for consistency. The analyzer never
  * inspects intrinsic payloads, so this asymmetry is invisible downstream.
+ *
+ * The schema extends CORE_SCHEMA, not DEFAULT_SCHEMA. CloudFormation's YAML
+ * subset doesn't support hash merges (`<<`) or the binary, omap, pairs, set
+ * and timestamp tags, and js-yaml's merge and omap handling is where its
+ * quadratic-CPU advisories live (e.g. GHSA-52cp-r559-cp3m,
+ * GHSA-5p4m-2wfm-xmqj). Template bodies come from any stack in the account,
+ * so they're treated as untrusted input. With CORE_SCHEMA a `<<` key stays a
+ * plain key, an explicit `!!omap` tag fails the parse (that stack is skipped
+ * with a warning), and unquoted dates stay strings, as they would in JSON.
  */
 const CFN_INTRINSIC_TAGS = [
   'Ref',
@@ -44,7 +53,7 @@ const CFN_INTRINSIC_TAGS = [
   'ToJsonString',
 ];
 
-const CFN_YAML_SCHEMA = yaml.DEFAULT_SCHEMA.extend(
+const CFN_YAML_SCHEMA = yaml.CORE_SCHEMA.extend(
   CFN_INTRINSIC_TAGS.flatMap(tag => [
     new yaml.Type(`!${tag}`, { kind: 'scalar', construct: data => ({ [`Fn::${tag}`]: data }) }),
     new yaml.Type(`!${tag}`, { kind: 'sequence', construct: data => ({ [`Fn::${tag}`]: data }) }),

@@ -5,9 +5,9 @@ import type { APIGatewayProxyEvent } from 'aws-lambda';
 const mockGetObject = vi.fn();
 
 vi.mock('./services/s3-client', () => ({
-  S3BucketClient: vi.fn().mockImplementation(() => ({
-    getObject: mockGetObject,
-  })),
+  S3BucketClient: vi.fn().mockImplementation(function () {
+    return { getObject: mockGetObject };
+  }),
 }));
 
 function makeEvent(query: Record<string, string> = {}): APIGatewayProxyEvent {
